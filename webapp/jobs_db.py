@@ -185,6 +185,19 @@ class JobsDb:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    def fetch_all_jobs_for_source_summary(self) -> list[dict[str, Any]]:
+        """All jobs, minimal columns — for Video / Source List (no row cap)."""
+        with self._connect() as c:
+            rows = c.execute(
+                """
+                SELECT filename, input_path, status,
+                       COALESCE(total_items, 0) AS total_items,
+                       COALESCE(processed_items, 0) AS processed_items
+                FROM jobs
+                """
+            ).fetchall()
+            return [dict(r) for r in rows]
+
     def retry_job(self, job_id: int) -> None:
         with self._connect() as c:
             c.execute(

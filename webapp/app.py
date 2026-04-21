@@ -9,13 +9,13 @@ import subprocess
 import shutil
 import threading
 import time
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 from datetime import datetime
 from pathlib import Path
 
 from typing import Any
 
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -189,21 +189,18 @@ def _frame_records(jobs: list[dict[str, object]]) -> list[dict[str, str]]:
     return records
 
 
-def _render_page(msg: str = "", page: int = 1) -> str:
-    jobs = db.list_jobs(limit=200)
-    records = _frame_records(jobs)
-    page_size = 5
-    total_records = len(records)
-    total_pages = max(1, (total_records + page_size - 1) // page_size)
-    page = max(1, min(page, total_pages))
-    start = (page - 1) * page_size
-    end = start + page_size
-    page_records = records[start:end]
-    paused = db.is_paused()
+FRAME_RESULTS_PAGE_SIZE = 5
+# Recent jobs loaded for Runs tab + frame record extraction (not the Video / Source table).
+JOBS_PANEL_LIMIT = 500
+SUMMARY_TABLE_PAGE_SIZE = 15
+
+
+def _aggregate_video_source_summary(
+    job_rows: list[dict[str, Any]],
+) -> dict[str, dict[str, int | str]]:
+    """Roll up jobs by basename(input_path || filename) — same rules as the old in-loop aggregation."""
     video_summary: dict[str, dict[str, int | str]] = {}
-    job_items: list[str] = []
-    counts = {"queued": 0, "running": 0, "done": 0, "error": 0, "cancelled": 0}
-    for j in jobs:
+    for j in job_rows:
         source = Path(j.get("input_path") or j.get("filename") or "").name
         key = source
         if key not in video_summary:
@@ -218,9 +215,89 @@ def _render_page(msg: str = "", page: int = 1) -> str:
                 "processed_frames": 0,
             }
         s = video_summary[key]
-        s[j["status"]] = int(s.get(j["status"], 0)) + 1
+        st = str(j.get("status") or "")
+        s[st] = int(s.get(st, 0)) + 1
         s["total_frames"] = int(s["total_frames"]) + int(j.get("total_items") or 0)
         s["processed_frames"] = int(s["processed_frames"]) + int(j.get("processed_items") or 0)
+    return video_summary
+
+
+def _home_query(page: int, hide_blanks: bool, summary_page: int) -> str:
+    """Query string for home page links (preserve frame + summary pagination)."""
+    hb = 1 if hide_blanks else 0
+    return f"page={page}&hide_blanks={hb}&summary_page={summary_page}"
+
+
+def _last_taxon_segment(species: str) -> str:
+    """Last non-empty segment of semicolon-separated SpeciesNet labels (e.g. ...;Eastern Gray Squirrel)."""
+    for seg in reversed([p.strip() for p in (species or "").split(";")]):
+        if seg:
+            return seg
+    return ""
+
+
+def _species_string_is_blank(species: str) -> bool:
+    """True for __Blank, or when the last taxon segment is Blank (e.g. uuid;;;;;;Blank)."""
+    sp = (species or "").lower()
+    if "__blank" in sp:
+        return True
+    return _last_taxon_segment(species or "").lower() == "blank"
+
+
+def _record_is_blank(species: str, description: str) -> bool:
+    """No confident species: __Blank in string, or semicolon path ending in Blank."""
+    desc = (description or "").lower()
+    if "__blank" in desc:
+        return True
+    return _species_string_is_blank(species or "")
+
+
+def _format_species_display(species: str, description: str) -> str:
+    if _record_is_blank(species, description):
+        return "No species match (blank)"
+    return species or "—"
+
+
+def _render_page(
+    msg: str = "",
+    page: int = 1,
+    hide_blanks: bool = True,
+    summary_page: int = 1,
+) -> str:
+    jobs = db.list_jobs(limit=JOBS_PANEL_LIMIT)
+    # Full list for Video Frame Browser (client-side hide/show blanks).
+    all_frame_records = _frame_records(jobs)
+    records = all_frame_records
+    if hide_blanks:
+        records = [
+            r
+            for r in records
+            if not _record_is_blank(r["species"], r["description"])
+        ]
+    page_size = FRAME_RESULTS_PAGE_SIZE
+    total_records = len(records)
+    total_pages = max(1, (total_records + page_size - 1) // page_size)
+    page = max(1, min(page, total_pages))
+    start = (page - 1) * page_size
+    end = start + page_size
+    page_records = records[start:end]
+    paused = db.is_paused()
+    # Video / Source List: all jobs in DB (separate query), not limited to JOBS_PANEL_LIMIT.
+    video_summary = _aggregate_video_source_summary(db.fetch_all_jobs_for_source_summary())
+    sorted_sources = sorted(video_summary.values(), key=lambda x: str(x["source"]).lower())
+    total_summary_sources = len(sorted_sources)
+    summary_total_pages = max(
+        1,
+        (total_summary_sources + SUMMARY_TABLE_PAGE_SIZE - 1) // SUMMARY_TABLE_PAGE_SIZE,
+    )
+    summary_page = max(1, min(summary_page, summary_total_pages))
+    ss = (summary_page - 1) * SUMMARY_TABLE_PAGE_SIZE
+    se = ss + SUMMARY_TABLE_PAGE_SIZE
+    summary_slice = sorted_sources[ss:se]
+
+    job_items: list[str] = []
+    counts = {"queued": 0, "running": 0, "done": 0, "error": 0, "cancelled": 0}
+    for j in jobs:
         counts[j["status"]] = counts.get(j["status"], 0) + 1
         preview = ""
         if j.get("outputs_json"):
@@ -278,8 +355,24 @@ def _render_page(msg: str = "", page: int = 1) -> str:
             f"<div class='job-actions'>{actions} {out_link} {open_link}</div>"
             f"</div>"
         )
+    summary_pagination_bits: list[str] = []
+    if total_summary_sources == 0:
+        summary_pagination_bits.append("<span class='job-meta'>0 sources</span>")
+    else:
+        if summary_page > 1:
+            summary_pagination_bits.append(
+                f"<a class='link-btn' href='/?{_home_query(page, hide_blanks, summary_page - 1)}'>Prev</a>"
+            )
+        summary_pagination_bits.append(
+            f"<span class='job-meta'>Sources {ss + 1}–{min(se, total_summary_sources)} of "
+            f"{total_summary_sources} · Page {summary_page} / {summary_total_pages}</span>"
+        )
+        if summary_page < summary_total_pages:
+            summary_pagination_bits.append(
+                f"<a class='link-btn' href='/?{_home_query(page, hide_blanks, summary_page + 1)}'>Next</a>"
+            )
     summary_rows = []
-    for v in sorted(video_summary.values(), key=lambda x: str(x["source"]).lower()):
+    for v in summary_slice:
         total = int(v["total_frames"])
         proc = int(v["processed_frames"])
         pct = int((proc / total) * 100) if total > 0 else 0
@@ -296,7 +389,7 @@ def _render_page(msg: str = "", page: int = 1) -> str:
         )
         summary_rows.append(
             f"<tr>"
-            f"<td>{v['source']}</td>"
+            f"<td>{html.escape(str(v['source']))}</td>"
             f"<td>{overall}</td>"
             f"<td>{v['queued']}</td>"
             f"<td>{v['running']}</td>"
@@ -308,9 +401,24 @@ def _render_page(msg: str = "", page: int = 1) -> str:
         )
     result_rows: list[str] = []
     for r in page_records:
+        species_disp = _format_species_display(r["species"], r["description"])
+        is_blank = _record_is_blank(r["species"], r["description"])
+        search_blob = (
+            r["source"]
+            + " "
+            + r["frame"]
+            + " "
+            + r["species"]
+            + " "
+            + species_disp
+            + " "
+            + r["description"]
+            + " blank no species match"
+        )
         result_rows.append(
             "<div class='result-card result-row' "
-            f"data-search='{html.escape((r['source'] + ' ' + r['frame'] + ' ' + r['species'] + ' ' + r['description']).lower(), quote=True)}'>"
+            f"data-is-blank='{'1' if is_blank else '0'}' "
+            f"data-search='{html.escape(search_blob.lower(), quote=True)}'>"
             f"<div><a href='/files/{r['annotated_rel']}' target='_blank'>"
             f"<img src='/files/{r['annotated_rel']}' class='thumb' "
             "onerror=\"this.onerror=null;this.replaceWith(document.createTextNode('Image removed'))\"/></a></div>"
@@ -318,19 +426,27 @@ def _render_page(msg: str = "", page: int = 1) -> str:
             f"<div><b>Job:</b> #{r['job_id']}</div>"
             f"<div><b>Video:</b> {html.escape(r['source'])}</div>"
             f"<div><b>Frame:</b> {html.escape(r['frame'])}</div>"
-            f"<div><b>Species:</b> {html.escape(r['species'])}</div>"
+            f"<div><b>Species:</b> {html.escape(species_disp)}</div>"
             f"<div class='desc-col' title='{html.escape(r['description'], quote=True)}'>{html.escape(r['description'])}</div>"
             "</div>"
             "</div>"
         )
     pagination_bits: list[str] = []
     if page > 1:
-        pagination_bits.append(f"<a class='link-btn' href='/?page={page - 1}'>Prev</a>")
-    pagination_bits.append(f"<span class='job-meta'>Page {page} / {total_pages} ({total_records} total)</span>")
+        pagination_bits.append(
+            f"<a class='link-btn' href='/?{_home_query(page - 1, hide_blanks, summary_page)}'>Prev</a>"
+        )
+    pagination_bits.append(
+        f"<span class='job-meta'>Page {page} / {total_pages} ({total_records} total, "
+        f"{FRAME_RESULTS_PAGE_SIZE} per page)</span>"
+    )
     if page < total_pages:
-        pagination_bits.append(f"<a class='link-btn' href='/?page={page + 1}'>Next</a>")
+        pagination_bits.append(
+            f"<a class='link-btn' href='/?{_home_query(page + 1, hide_blanks, summary_page)}'>Next</a>"
+        )
     has_active = counts.get("queued", 0) > 0 or counts.get("running", 0) > 0
-    records_json = json.dumps(records).replace("</", "<\\/")
+    # Always embed all frames so the video browser checkbox can reveal blanks without a full reload.
+    records_json = json.dumps(all_frame_records).replace("</", "<\\/")
     return f"""<!doctype html>
 <html><head><meta charset='utf-8'/>
 <meta name='viewport' content='width=device-width, initial-scale=1'/>
@@ -374,13 +490,15 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
 .result-card{{display:grid;grid-template-columns:240px 1fr;gap:12px;align-items:start;padding:10px;border:1px solid #e2e8f0;border-radius:10px;background:#fff}}
 .result-text{{display:grid;gap:5px;font-size:13px}}
 .desc-col{{max-width:100%;color:#334155}}
-.browser-row{{display:grid;grid-template-columns:280px 1fr 1fr;gap:12px}}
-.video-list{{max-height:340px;overflow:auto;border:1px solid #e2e8f0;border-radius:8px;padding:8px;background:#fff}}
-.frame-list{{max-height:340px;overflow:auto;border:1px solid #e2e8f0;border-radius:8px;padding:8px;background:#fff}}
-.video-item,.frame-item{{display:block;width:100%;text-align:left;padding:7px 8px;border:1px solid #dbe3ef;border-radius:6px;background:#f8fafc;color:#0f172a;cursor:pointer;margin-bottom:6px}}
+.browser-row{{display:grid;grid-template-columns:minmax(0,280px) minmax(0,1fr) minmax(0,1fr);gap:12px;align-items:start}}
+.browser-row > div{{min-width:0}}
+.video-list{{max-height:340px;overflow:auto;border:1px solid #e2e8f0;border-radius:8px;padding:8px;background:#fff;box-sizing:border-box}}
+.frame-list{{max-height:340px;overflow:auto;border:1px solid #e2e8f0;border-radius:8px;padding:8px;background:#fff;box-sizing:border-box}}
+.video-item,.frame-item{{display:block;width:100%;text-align:left;padding:7px 8px;border:1px solid #dbe3ef;border-radius:6px;background:#f8fafc;color:#0f172a;cursor:pointer;margin-bottom:6px;box-sizing:border-box;overflow-wrap:anywhere}}
 .video-item.active,.frame-item.active{{background:#dbeafe;border-color:#93c5fd}}
-.inline-preview{{border:1px solid #e2e8f0;border-radius:8px;padding:8px;background:#fff;display:grid;gap:8px}}
-.inline-preview img{{max-width:100%;border:1px solid #cbd5e1;border-radius:6px}}
+.inline-preview{{border:1px solid #e2e8f0;border-radius:8px;padding:8px;background:#fff;display:grid;gap:8px;min-width:0;max-width:100%;max-height:340px;overflow:auto;box-sizing:border-box}}
+.inline-preview .job-meta{{overflow-wrap:anywhere;word-break:break-word}}
+.inline-preview img{{display:block;width:100%;max-width:100%;height:auto;max-height:min(260px,42vh);object-fit:contain;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box}}
 .tabs{{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}}
 .tab-btn{{padding:8px 10px;border-radius:8px;border:1px solid #c7d2fe;background:#eef2ff;color:#3730a3;cursor:pointer}}
 .tab-btn.active{{background:#3730a3;color:#fff;border-color:#3730a3}}
@@ -471,6 +589,8 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
 </div>
 <div class='panel' style='margin-top:16px'>
   <h3 style='margin-top:0'>Video / Source List</h3>
+  <p class='job-meta' style='margin:0 0 10px 0'>Aggregates <b>all</b> jobs in the database by source file (not limited to the recent jobs panel). {SUMMARY_TABLE_PAGE_SIZE} sources per page.</p>
+  <div class='actions' style='margin-bottom:10px'>{''.join(summary_pagination_bits)}</div>
   <table class='tbl'>
     <thead>
       <tr><th>Source</th><th>Overall</th><th>Queued</th><th>Running</th><th>Done</th><th>Error</th><th>Cancelled</th><th>Frame Progress</th></tr>
@@ -482,6 +602,7 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
 </div>
 <div class='panel' style='margin-top:16px'>
   <h3 style='margin-top:0'>Video Frame Browser</h3>
+  <p class='job-meta' style='margin:0 0 10px 0'>Which frames appear here follows <b>Settings → Hide blank frames</b> (same as Frame Results).</p>
   <div class='browser-row'>
     <div>
       <label>Videos</label>
@@ -502,12 +623,14 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
 <div class='tabs'>
   <button id='tabResultsBtn' class='tab-btn active' type='button' onclick='showTab("results")'>Frame Results</button>
   <button id='tabRunsBtn' class='tab-btn' type='button' onclick='showTab("runs")'>Runs</button>
+  <button id='tabSettingsBtn' class='tab-btn' type='button' onclick='showTab("settings")'>Settings</button>
 </div>
 <div id='tabResults' style='display:block'>
   <div class='panel' style='margin-top:10px'>
     <h3 style='margin-top:0'>Frame Results (Searchable)</h3>
+    <p class='job-meta' style='margin:0 0 8px 0'>Up to <b>{FRAME_RESULTS_PAGE_SIZE}</b> rows per page. Blank visibility: <b>Settings</b> tab.</p>
     <label>Search by species, video, frame, or description</label>
-    <input id='resultsSearch' placeholder='e.g. hedgehog, IMG_0406, frame_0003' oninput='filterResults()' />
+    <input id='resultsSearch' placeholder='e.g. hedgehog, IMG_0406, frame_0003, blank' oninput='filterResults()' />
     <div style='height:8px'></div>
     <div class='actions'>{''.join(pagination_bits)}</div>
     <div style='height:10px'></div>
@@ -519,6 +642,17 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
 <div id='tabRuns' style='display:none'>
   <h3>Runs</h3>
   <div class='jobs'>{''.join(job_items)}</div>
+</div>
+<div id='tabSettings' style='display:none'>
+  <div class='panel' style='margin-top:10px'>
+    <h3 style='margin-top:0'>Display</h3>
+    <p class='job-meta'>One setting for both <b>Frame Results</b> (list + pagination) and <b>Video Frame Browser</b> (frame list + inline preview). Blanks are frames with no species match (label ending in <code>Blank</code> or containing <code>__Blank</code>).</p>
+    <label style='font-size:14px;display:flex;align-items:flex-start;gap:10px;cursor:pointer;max-width:52rem'>
+      <input type='checkbox' id='settingsHideBlanks' style='width:auto;margin-top:4px' {'checked' if hide_blanks else ''} onchange='applyHideBlanksSetting()' />
+      <span><b>Hide blank / no-match frames</b> — when checked, those frames are omitted from Frame Results and from the Video Frame Browser lists.</span>
+    </label>
+    <p class='job-meta' style='margin-top:14px'>Changing this reloads the page (frame results reset to page 1; summary page is kept).</p>
+  </div>
 </div>
 <div id='appConfirmModal' class='app-modal' role='dialog' aria-modal='true'>
   <div class='app-modal-backdrop' id='appConfirmBackdrop'></div>
@@ -564,11 +698,31 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
 const SCROLL_KEY = 'wildlife_ui_scroll_y';
 const HAS_ACTIVE = {"true" if has_active else "false"};
 const FRAME_RECORDS = {records_json};
+const HIDE_BLANKS = {"true" if hide_blanks else "false"};
 let CURRENT_ZOOM = 100;
 let ACTIVE_VIDEO = '';
 let ACTIVE_FRAME = '';
 let _confirmResolve = null;
 let _enqueuePreviewState = null;
+function lastTaxonSegment(species) {{
+  const parts = String(species || '').split(';').map((p) => p.trim());
+  for (let i = parts.length - 1; i >= 0; i--) {{
+    if (parts[i]) return parts[i];
+  }}
+  return '';
+}}
+function isBlankRecord(r) {{
+  const s = String(r.species || '');
+  const d = String(r.description || '').toLowerCase();
+  if (d.includes('__blank')) return true;
+  if (s.toLowerCase().includes('__blank')) return true;
+  return lastTaxonSegment(s).toLowerCase() === 'blank';
+}}
+function formatSpeciesLabel(r) {{
+  if (!r) return '—';
+  if (isBlankRecord(r)) return 'No species match (blank)';
+  return r.species || '—';
+}}
 function openConfirmModal(message) {{
   return new Promise((resolve) => {{
     _confirmResolve = resolve;
@@ -753,10 +907,23 @@ function setViewerZoom(v) {{
 }}
 function showTab(name) {{
   const isResults = name === 'results';
+  const isRuns = name === 'runs';
+  const isSettings = name === 'settings';
   document.getElementById('tabResults').style.display = isResults ? 'block' : 'none';
-  document.getElementById('tabRuns').style.display = isResults ? 'none' : 'block';
-  document.getElementById('tabResultsBtn').classList.toggle('active', isResults);
-  document.getElementById('tabRunsBtn').classList.toggle('active', !isResults);
+  document.getElementById('tabRuns').style.display = isRuns ? 'block' : 'none';
+  const ts = document.getElementById('tabSettings');
+  if (ts) ts.style.display = isSettings ? 'block' : 'none';
+  document.getElementById('tabResultsBtn')?.classList.toggle('active', isResults);
+  document.getElementById('tabRunsBtn')?.classList.toggle('active', isRuns);
+  document.getElementById('tabSettingsBtn')?.classList.toggle('active', isSettings);
+}}
+function applyHideBlanksSetting() {{
+  const cb = document.getElementById('settingsHideBlanks');
+  if (!cb) return;
+  const u = new URL(window.location.href);
+  u.searchParams.set('hide_blanks', cb.checked ? '1' : '0');
+  u.searchParams.set('page', '1');
+  window.location.href = u.toString();
 }}
 function attachImageClickHandlers() {{
   document.querySelectorAll('#resultsBody img.thumb').forEach((img) => {{
@@ -780,35 +947,44 @@ function renderInlinePreview(r) {{
     return;
   }}
   const src = `/files/${{r.annotated_rel}}`;
+  const sp = esc(formatSpeciesLabel(r));
   box.innerHTML = `
-    <div><b>${{r.source}}</b></div>
-    <div class='job-meta'>${{r.frame}} | ${{r.species}}</div>
+    <div><b>${{esc(r.source)}}</b></div>
+    <div class='job-meta'>${{esc(r.frame)}} | ${{sp}}</div>
     <img src="${{src}}" alt="frame preview" loading="lazy" />
-    <div class='job-meta'>${{r.description || ''}}</div>
-    <div><button class='btn btn-subtle' type='button' onclick="openViewer('${{src}}','${{(r.source + ' :: ' + r.frame).replace(/'/g, "\\'")}}')">Open Zoom Viewer</button></div>
+    <div class='job-meta'>${{esc(r.description || '')}}</div>
+    <div><button class='btn btn-subtle' type='button' onclick="openViewer('${{src}}','${{(r.source + ' :: ' + r.frame).replace(/'/g, "\\\\'")}}')">Open Zoom Viewer</button></div>
   `;
 }}
 function renderVideoBrowser() {{
+  const hideBlanks = HIDE_BLANKS;
+  const sourceRecords = hideBlanks
+    ? FRAME_RECORDS.filter((r) => !isBlankRecord(r))
+    : FRAME_RECORDS.slice();
   const videoMap = new Map();
-  for (const r of FRAME_RECORDS) {{
+  for (const r of sourceRecords) {{
     const k = r.source || 'unknown';
     if (!videoMap.has(k)) videoMap.set(k, []);
     videoMap.get(k).push(r);
   }}
-  const videoNames = Array.from(videoMap.keys()).sort((a, b) => a.localeCompare(b));
+  const videoNames = Array.from(videoMap.keys())
+    .filter((n) => (videoMap.get(n) || []).length > 0)
+    .sort((a, b) => a.localeCompare(b));
   const vList = document.getElementById('videoList');
   const fList = document.getElementById('frameList');
+  const prevBox = document.getElementById('inlinePreview');
   if (!vList || !fList) return;
   if (videoNames.length === 0) {{
-    vList.innerHTML = "<div class='job-meta'>No videos yet</div>";
-    fList.innerHTML = "<div class='job-meta'>No frames yet</div>";
+    vList.innerHTML = "<div class='job-meta'>No videos with visible frames" + (hideBlanks ? " — <b>Settings</b>: turn off &quot;Hide blank…&quot; if every frame is blank." : "") + "</div>";
+    fList.innerHTML = "<div class='job-meta'>No frames to show</div>";
+    if (prevBox) prevBox.innerHTML = "<div class='job-meta'>No frame to preview</div>";
     return;
   }}
   if (!ACTIVE_VIDEO || !videoMap.has(ACTIVE_VIDEO)) ACTIVE_VIDEO = videoNames[0];
   vList.innerHTML = videoNames.map((name) => {{
     const active = name === ACTIVE_VIDEO ? ' active' : '';
     const cnt = videoMap.get(name).length;
-    return `<button class='video-item${{active}}' type='button' data-video='${{name}}'>${{name}} (${{cnt}})</button>`;
+    return `<button class='video-item${{active}}' type='button' data-video='${{esc(name)}}'>${{esc(name)}} (${{cnt}})</button>`;
   }}).join('');
   vList.querySelectorAll('.video-item').forEach((btn) => {{
     btn.addEventListener('click', () => {{
@@ -819,11 +995,14 @@ function renderVideoBrowser() {{
   }});
   const frames = (videoMap.get(ACTIVE_VIDEO) || []).slice().sort((a, b) => String(a.frame).localeCompare(String(b.frame)));
   if (!ACTIVE_FRAME && frames.length > 0) ACTIVE_FRAME = String(frames[0].annotated_rel);
+  if (frames.length > 0 && !frames.some((x) => String(x.annotated_rel) === ACTIVE_FRAME)) {{
+    ACTIVE_FRAME = String(frames[0].annotated_rel);
+  }}
   fList.innerHTML = frames.map((r) => {{
     const src = `/files/${{r.annotated_rel}}`;
     const active = String(r.annotated_rel) === ACTIVE_FRAME ? ' active' : '';
-    const text = `${{r.frame}} | ${{r.species}}`;
-    return `<button class='frame-item${{active}}' type='button' data-src='${{src}}' data-id='${{r.annotated_rel}}' data-title='${{r.source}} :: ${{r.frame}}'>${{text}}</button>`;
+    const text = `${{esc(String(r.frame))}} | ${{esc(formatSpeciesLabel(r))}}`;
+    return `<button class='frame-item${{active}}' type='button' data-src='${{src}}' data-id='${{esc(String(r.annotated_rel))}}' data-title='${{esc((r.source || '') + ' :: ' + (r.frame || ''))}}'>${{text}}</button>`;
   }}).join('');
   fList.querySelectorAll('.frame-item').forEach((btn) => {{
     btn.addEventListener('click', () => {{
@@ -882,8 +1061,9 @@ function filterResults(){{
   const q = (document.getElementById('resultsSearch')?.value || '').toLowerCase().trim();
   const rows = document.querySelectorAll('.result-row');
   rows.forEach((row)=>{{
-    const text = row.getAttribute('data-search') || '';
-    row.style.display = (!q || text.includes(q)) ? '' : 'none';
+    const text = (row.getAttribute('data-search') || '').toLowerCase();
+    const matchQ = !q || text.includes(q);
+    row.style.display = matchQ ? '' : 'none';
   }});
 }}
 attachImageClickHandlers();
@@ -1037,8 +1217,18 @@ async def startup_event() -> None:
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index(msg: str = "", page: int = 1) -> str:
-    return _render_page(msg, page=page)
+async def index(
+    msg: str = "",
+    page: int = 1,
+    hide_blanks: int = Query(1, ge=0, le=1),
+    summary_page: int = Query(1, ge=1),
+) -> str:
+    return _render_page(
+        msg,
+        page=page,
+        hide_blanks=bool(hide_blanks),
+        summary_page=summary_page,
+    )
 
 
 @app.post("/process", response_class=HTMLResponse)
@@ -1161,8 +1351,23 @@ async def reset_all() -> RedirectResponse:
     )
 
 
+def _same_origin_referer_or(request: Request, default: str = "/") -> str:
+    """Use Referer for post-action redirect if it matches this app (avoid losing ?page= etc.)."""
+    ref = (request.headers.get("referer") or "").strip()
+    if not ref:
+        return default
+    try:
+        r = urlparse(ref)
+        b = urlparse(str(request.base_url))
+        if r.scheme == b.scheme and r.netloc == b.netloc and r.path:
+            return ref
+    except Exception:
+        pass
+    return default
+
+
 @app.get("/open-output/{job_id}")
-async def open_output(job_id: int) -> RedirectResponse:
+async def open_output(job_id: int, request: Request) -> RedirectResponse:
     j = db.get_job(job_id)
     if j and j.get("output_dir"):
         p = Path(j["output_dir"])
@@ -1171,7 +1376,7 @@ async def open_output(job_id: int) -> RedirectResponse:
                 os.startfile(str(p))  # type: ignore[attr-defined]
             elif os.name == "posix":
                 subprocess.Popen(["xdg-open", str(p)])
-    return RedirectResponse(url="/", status_code=303)
+    return RedirectResponse(url=_same_origin_referer_or(request), status_code=303)
 
 
 @app.get("/browse-output/{job_id}", response_class=HTMLResponse)
@@ -1241,7 +1446,7 @@ async def browse_output(job_id: int) -> HTMLResponse:
         )
     if not rows:
         rows.append("<p>No annotated frames found in this output folder.</p>")
-    html = (
+    page_html = (
         "<!doctype html><html><body style='font-family:Arial,sans-serif;max-width:980px;margin:20px auto'>"
         f"<h3>Output Browser - Job #{job_id}</h3>"
         f"<p>Folder: <code>{rel_dir}</code></p>"
@@ -1249,13 +1454,13 @@ async def browse_output(job_id: int) -> HTMLResponse:
         + "".join(rows)
         + "</body></html>"
     )
-    return HTMLResponse(html)
+    return HTMLResponse(page_html)
 
 
 @app.get("/cleanup-output")
 async def cleanup_output() -> RedirectResponse:
     active_dirs: set[str] = set()
-    for j in db.list_jobs(limit=500):
+    for j in db.list_jobs(limit=JOBS_PANEL_LIMIT):
         if j.get("status") in ("queued", "running") and j.get("output_dir"):
             active_dirs.add(str(j.get("output_dir")))
     if OUT_DIR.is_dir():
