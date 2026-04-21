@@ -33,6 +33,15 @@ ${EDITOR:-nano} .env
 
 Some scripts (for example **`scripts\test-local.ps1`**) copy **`.env.example` → `.env`** automatically if `.env` is missing—still review `.env` before relying on it in production.
 
+### Quick demo (pull published images, no local builds)
+
+On **Windows (PowerShell)** from the repo root:
+
+1. **`.\scripts\quick-demo.ps1`** — copies **`.env.demo`** → **`.env`** if `.env` is missing, pulls **`ghcr.io/enablsoft/...:latest`**, starts the stack, and waits for `/health`. Use **`-Species`** to include the species service; use **`-OverwriteEnv`** to replace an existing `.env`.
+2. In another terminal: **`.\scripts\run-webapp.ps1`**, then open **http://127.0.0.1:8110**.
+
+**`.env.demo`** is committed (no secrets) and pins public **`:latest`** tags for a smoke test. For production, copy **`.env.example`** and set explicit image tags.
+
 ---
 
 ## Contents
@@ -40,6 +49,7 @@ Some scripts (for example **`scripts\test-local.ps1`**) copy **`.env.example` �
 | Area | What you use it for |
 |------|---------------------|
 | **`.env.example`** | Committed template—copy to `.env` and customize |
+| **`.env.demo`** | Optional: published `:latest` image tags for `quick-demo.ps1` |
 | **`docker-compose.yml`** | ML service, batch UI, optional species profile |
 | **`scripts/`** | PowerShell: stack health, tests, web app, `run.ps1` helper |
 | **`webapp/`** | FastAPI UI: queue, runs, frame browser, batch folder enqueue |
