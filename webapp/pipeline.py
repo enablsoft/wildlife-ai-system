@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 import json
+import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -18,8 +20,9 @@ def extract_frames(video_path: Path, frames_dir: Path, fps: float = 1.0) -> list
     frames_dir.mkdir(parents=True, exist_ok=True)
     stem = video_path.stem
     out_pattern = frames_dir / f"{stem}_frame_%04d.jpg"
+    ffmpeg_bin = _resolve_ffmpeg()
     cmd = [
-        "ffmpeg",
+        ffmpeg_bin,
         "-y",
         "-i",
         str(video_path),
@@ -29,6 +32,27 @@ def extract_frames(video_path: Path, frames_dir: Path, fps: float = 1.0) -> list
     ]
     subprocess.run(cmd, check=True, capture_output=True)
     return sorted(p for p in frames_dir.glob(f"{stem}_frame_*.jpg") if p.is_file())
+
+
+def _resolve_ffmpeg() -> str:
+    ff = shutil.which("ffmpeg")
+    if ff:
+        return ff
+    winget_pkg = (
+        Path(os.environ.get("LOCALAPPDATA", ""))
+        / "Microsoft"
+        / "WinGet"
+        / "Packages"
+        / "Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe"
+    )
+    if winget_pkg.is_dir():
+        # Support multiple ffmpeg versions (e.g. ffmpeg-8.1-full_build, ffmpeg-8.2-...)
+        for p in sorted(winget_pkg.glob("ffmpeg-*-full_build/bin/ffmpeg.exe"), reverse=True):
+            if p.is_file():
+                return str(p)
+    raise FileNotFoundError(
+        "ffmpeg not found in PATH or Winget cache; install ffmpeg and restart terminal."
+    )
 
 
 def call_detector(image_path: Path, ml_url: str) -> dict[str, Any]:

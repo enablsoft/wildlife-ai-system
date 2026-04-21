@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import shutil
 import threading
 import time
@@ -25,20 +27,30 @@ app = FastAPI(title="Wildlife Media Processor", version="0.2.0")
 app.mount("/files", StaticFiles(directory=str(ROOT)), name="files")
 db = JobsDb(DB_PATH)
 _stop_worker = False
+logger = logging.getLogger("wildlife_webapp")
+if not logger.handlers:
+    level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
 
 
 def _render_page(msg: str = "") -> str:
     jobs = db.list_jobs(limit=200)
     paused = db.is_paused()
     job_items: list[str] = []
+    counts = {"queued": 0, "running": 0, "done": 0, "error": 0, "cancelled": 0}
     for j in jobs:
+        counts[j["status"]] = counts.get(j["status"], 0) + 1
         preview = ""
         if j.get("outputs_json"):
             try:
                 outputs = json.loads(j["outputs_json"])
                 if outputs:
                     ann = Path(outputs[0]["annotated"]).relative_to(ROOT).as_posix()
-                    preview = f"<br/><img src='/files/{ann}' style='max-width:380px;border:1px solid #ccc'/>"
+                    preview = f"<img src='/files/{ann}' class='preview'/>"
             except Exception:
                 preview = ""
         logs = (j.get("logs") or "").strip().splitlines()
@@ -46,39 +58,110 @@ def _render_page(msg: str = "") -> str:
         err = j.get("error_text") or ""
         actions = ""
         if j["status"] in ("error", "cancelled"):
-            actions += f"<a href='/retry/{j['id']}'>retry</a> "
+            actions += f"<a class='link-btn' href='/retry/{j['id']}'>Retry</a> "
         if j["status"] == "queued":
-            actions += f"<a href='/cancel/{j['id']}'>cancel</a>"
+            actions += f"<a class='link-btn' href='/cancel/{j['id']}'>Cancel</a>"
+        status_class = {
+            "queued": "st-queued",
+            "running": "st-running",
+            "done": "st-done",
+            "error": "st-error",
+            "cancelled": "st-cancelled",
+        }.get(j["status"], "")
+        out_dir = j.get("output_dir") or ""
+        out_link = ""
+        if out_dir:
+            try:
+                rel = Path(out_dir).relative_to(ROOT).as_posix()
+                out_link = f"<a class='link-btn' href='/files/{rel}'>Output Folder</a>"
+            except Exception:
+                out_link = ""
         job_items.append(
-            f"<li><b>#{j['id']}</b> {j['filename']} [{j['status']}] "
-            f"<small>{j.get('created_at','')}</small>"
-            f"<br/><small>{last_log}</small>"
-            f"{f'<br/><code>{err}</code>' if err else ''}"
-            f"{preview}<br/>{actions}</li>"
+            f"<div class='job-card'>"
+            f"<div class='job-head'><div><b>#{j['id']}</b> {j['filename']}</div>"
+            f"<span class='status {status_class}'>{j['status']}</span></div>"
+            f"<div class='job-meta'>Created: {j.get('created_at','')} | Started: {j.get('started_at') or '-'} | Finished: {j.get('finished_at') or '-'}</div>"
+            f"<div class='job-log'>{last_log or '-'}</div>"
+            f"{f'<div class=\"job-err\">{err}</div>' if err else ''}"
+            f"{preview}"
+            f"<div class='job-actions'>{actions} {out_link}</div>"
+            f"</div>"
         )
     return f"""<!doctype html>
-<html><body style='font-family:Arial,sans-serif;max-width:980px;margin:1.5rem auto'>
-<h2>Wildlife Processor</h2>
-<p>{msg}</p>
-<p>Queue state: <b>{'Paused' if paused else 'Running'}</b> |
-<a href='/pause'>Pause</a> | <a href='/resume'>Resume</a> | <a href='/'>Refresh</a></p>
-<form method="post" enctype="multipart/form-data" action="/process">
-<label>Media file (image/video):</label><br/>
-<input type="file" name="media" required /><br/><br/>
-<label>Frame rate for video (fps):</label><br/>
-<input type="number" step="0.1" value="1" name="fps"/><br/><br/>
-<label>ML URL:</label><br/>
-<input name="ml_url" value="http://127.0.0.1:8010" style="width:360px"/><br/><br/>
-<label>Species URL:</label><br/>
-<input name="species_url" value="http://127.0.0.1:8100" style="width:360px"/><br/><br/>
-<button type="submit">Queue job</button>
-</form>
+<html><head><meta charset='utf-8'/>
+<meta name='viewport' content='width=device-width, initial-scale=1'/>
+<title>Wildlife Processor</title>
+<style>
+body{{font-family:Inter,Segoe UI,Arial,sans-serif;background:#f6f8fb;color:#1e293b;margin:0}}
+.wrap{{max-width:1200px;margin:0 auto;padding:20px}}
+.top{{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}}
+.title{{font-size:28px;font-weight:700}}
+.badge{{padding:6px 10px;border-radius:999px;background:{'#fef3c7' if paused else '#dcfce7'};color:#111827;font-weight:600}}
+.row{{display:grid;grid-template-columns:1fr 1fr;gap:16px}}
+.panel{{background:white;border:1px solid #e5e7eb;border-radius:14px;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}}
+.counts{{display:grid;grid-template-columns:repeat(5,minmax(80px,1fr));gap:8px;margin-top:8px}}
+.count{{background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:10px;text-align:center}}
+.count b{{display:block;font-size:20px}}
+label{{font-size:13px;font-weight:600;color:#334155}}
+input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-sizing:border-box}}
+.btn{{display:inline-block;padding:9px 12px;border-radius:8px;background:#0f172a;color:white;text-decoration:none;border:0;cursor:pointer}}
+.btn-subtle{{background:#334155}}
+.actions a{{margin-right:8px}}
+.msg{{margin:8px 0;color:#0f766e}}
+.jobs{{margin-top:14px;display:grid;grid-template-columns:1fr;gap:12px}}
+.job-card{{background:white;border:1px solid #e5e7eb;border-radius:12px;padding:12px}}
+.job-head{{display:flex;justify-content:space-between;align-items:center}}
+.status{{padding:4px 8px;border-radius:999px;font-size:12px;font-weight:700;text-transform:uppercase}}
+.st-queued{{background:#e2e8f0}} .st-running{{background:#bfdbfe}} .st-done{{background:#bbf7d0}} .st-error{{background:#fecaca}} .st-cancelled{{background:#f1f5f9}}
+.job-meta{{font-size:12px;color:#64748b;margin-top:4px}}
+.job-log{{margin-top:8px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px;font-family:Consolas,monospace;font-size:12px}}
+.job-err{{margin-top:8px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:8px;color:#991b1b;font-family:Consolas,monospace;font-size:12px}}
+.preview{{margin-top:10px;max-width:360px;border:1px solid #cbd5e1;border-radius:8px}}
+.job-actions{{margin-top:10px}}
+.link-btn{{display:inline-block;padding:6px 10px;background:#eef2ff;border:1px solid #c7d2fe;color:#3730a3;border-radius:8px;text-decoration:none;margin-right:8px}}
+</style></head>
+<body><div class='wrap'>
+<div class='top'><div class='title'>Wildlife Processor</div><div class='badge'>{'Paused' if paused else 'Running'}</div></div>
+<div class='msg'>{msg}</div>
+<div class='row'>
+  <div class='panel'>
+    <h3 style='margin-top:0'>Queue Control</h3>
+    <div class='actions'>
+      <a class='btn btn-subtle' href='/pause'>Pause</a>
+      <a class='btn btn-subtle' href='/resume'>Resume</a>
+      <a class='btn btn-subtle' href='/' >Refresh</a>
+    </div>
+    <div class='counts'>
+      <div class='count'><small>Queued</small><b>{counts.get('queued',0)}</b></div>
+      <div class='count'><small>Running</small><b>{counts.get('running',0)}</b></div>
+      <div class='count'><small>Done</small><b>{counts.get('done',0)}</b></div>
+      <div class='count'><small>Error</small><b>{counts.get('error',0)}</b></div>
+      <div class='count'><small>Cancelled</small><b>{counts.get('cancelled',0)}</b></div>
+    </div>
+  </div>
+  <div class='panel'>
+    <h3 style='margin-top:0'>New Job</h3>
+    <form method='post' enctype='multipart/form-data' action='/process'>
+      <label>Media file (image/video)</label><input type='file' name='media' required />
+      <div style='height:8px'></div>
+      <label>Frame rate (video)</label><input type='number' step='0.1' value='1' name='fps'/>
+      <div style='height:8px'></div>
+      <label>ML URL</label><input name='ml_url' value='http://127.0.0.1:8010'/>
+      <div style='height:8px'></div>
+      <label>Species URL</label><input name='species_url' value='http://127.0.0.1:8100'/>
+      <div style='height:10px'></div>
+      <button class='btn' type='submit'>Queue Job</button>
+    </form>
+  </div>
+</div>
 <h3>Runs</h3>
-<ol>{''.join(job_items)}</ol>
-</body></html>"""
+<div class='jobs'>{''.join(job_items)}</div>
+<script>setTimeout(()=>location.reload(),3000)</script>
+</div></body></html>"""
 
 
 def _worker_loop() -> None:
+    logger.info("Worker loop started")
     while not _stop_worker:
         time.sleep(1)
         if db.is_paused():
@@ -87,6 +170,7 @@ def _worker_loop() -> None:
         if not job:
             continue
         jid = int(job["id"])
+        logger.info("job_id=%s status=running file=%s", jid, job["filename"])
         db.mark_running(jid)
         try:
             db.append_log(jid, "Started")
@@ -95,10 +179,14 @@ def _worker_loop() -> None:
             out_dir.mkdir(parents=True, exist_ok=True)
             if job["media_type"] == "video":
                 db.append_log(jid, "Extracting frames")
+                logger.info("job_id=%s stage=extract_frames input=%s", jid, input_path.name)
                 images = extract_frames(input_path, IN_DIR, fps=max(0.1, float(job["fps"])))
                 db.append_log(jid, f"Frames: {len(images)}")
+                logger.info("job_id=%s stage=extract_frames_done frames=%s", jid, len(images))
             else:
                 images = [input_path]
+                logger.info("job_id=%s stage=image_ready file=%s", jid, input_path.name)
+            logger.info("job_id=%s stage=inference count=%s", jid, len(images))
             rows = process_images(
                 images,
                 out_dir,
@@ -107,8 +195,10 @@ def _worker_loop() -> None:
             )
             db.append_log(jid, f"Done: {len(rows)} outputs")
             db.mark_done(jid, str(out_dir), rows)
+            logger.info("job_id=%s status=done outputs=%s out_dir=%s", jid, len(rows), out_dir)
         except Exception as e:
             db.mark_error(jid, str(e))
+            logger.exception("job_id=%s status=error msg=%s", jid, e)
 
 
 @app.on_event("startup")
@@ -148,28 +238,39 @@ async def process(
         ml_url=ml_url,
         species_url=species_url,
     )
+    logger.info(
+        "job_queued file=%s media_type=%s ml_url=%s species_url=%s",
+        media.filename,
+        media_type,
+        ml_url,
+        species_url,
+    )
     return RedirectResponse(url="/", status_code=303)
 
 
 @app.get("/pause")
 async def pause() -> RedirectResponse:
     db.set_paused(True)
+    logger.info("queue_state=paused")
     return RedirectResponse(url="/", status_code=303)
 
 
 @app.get("/resume")
 async def resume() -> RedirectResponse:
     db.set_paused(False)
+    logger.info("queue_state=running")
     return RedirectResponse(url="/", status_code=303)
 
 
 @app.get("/retry/{job_id}")
 async def retry(job_id: int) -> RedirectResponse:
     db.retry_job(job_id)
+    logger.info("job_id=%s action=retry", job_id)
     return RedirectResponse(url="/", status_code=303)
 
 
 @app.get("/cancel/{job_id}")
 async def cancel(job_id: int) -> RedirectResponse:
     db.cancel_job(job_id)
+    logger.info("job_id=%s action=cancel", job_id)
     return RedirectResponse(url="/", status_code=303)
