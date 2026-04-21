@@ -74,6 +74,32 @@ Video test from terminal:
 
 This extracts frames to `test-media/input/` and then runs `test-local.ps1`, writing JSON outputs to `test-media/output/`.
 
+## Python web app interface (automatic processing)
+
+You can run a local Python web app that does:
+
+- upload image/video
+- video -> frame extraction
+- detector + species calls
+- annotated images with bounding boxes
+- JSON results saved to `test-media/output/run_<timestamp>/`
+
+Start services first (include species):
+
+```powershell
+docker compose --env-file .env --profile species up -d
+```
+
+Run web app:
+
+```powershell
+.\scripts\run-webapp.ps1
+```
+
+Open:
+
+- `http://localhost:8110`
+
 To include species outputs, start stack with species profile first:
 
 ```powershell
