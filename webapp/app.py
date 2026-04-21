@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import subprocess
 import shutil
 import threading
 import time
@@ -40,9 +41,27 @@ if not logger.handlers:
 def _render_page(msg: str = "") -> str:
     jobs = db.list_jobs(limit=200)
     paused = db.is_paused()
+    video_summary: dict[str, dict[str, int | str]] = {}
     job_items: list[str] = []
     counts = {"queued": 0, "running": 0, "done": 0, "error": 0, "cancelled": 0}
     for j in jobs:
+        source = Path(j.get("input_path") or j.get("filename") or "").name
+        key = source
+        if key not in video_summary:
+            video_summary[key] = {
+                "source": source,
+                "queued": 0,
+                "running": 0,
+                "done": 0,
+                "error": 0,
+                "cancelled": 0,
+                "total_frames": 0,
+                "processed_frames": 0,
+            }
+        s = video_summary[key]
+        s[j["status"]] = int(s.get(j["status"], 0)) + 1
+        s["total_frames"] = int(s["total_frames"]) + int(j.get("total_items") or 0)
+        s["processed_frames"] = int(s["processed_frames"]) + int(j.get("processed_items") or 0)
         counts[j["status"]] = counts.get(j["status"], 0) + 1
         preview = ""
         if j.get("outputs_json"):
@@ -70,22 +89,60 @@ def _render_page(msg: str = "") -> str:
         }.get(j["status"], "")
         out_dir = j.get("output_dir") or ""
         out_link = ""
+        open_link = ""
         if out_dir:
             try:
                 rel = Path(out_dir).relative_to(ROOT).as_posix()
                 out_link = f"<a class='link-btn' href='/files/{rel}'>Output Folder</a>"
+                open_link = f"<a class='link-btn' href='/open-output/{j['id']}'>Open Folder</a>"
             except Exception:
                 out_link = ""
+                open_link = ""
+        prog = ""
+        total = int(j.get("total_items") or 0)
+        done_n = int(j.get("processed_items") or 0)
+        if total > 0:
+            pct = int((done_n / total) * 100)
+            prog = f"<div class='progress'><div class='bar' style='width:{pct}%'></div></div><div class='job-meta'>Progress: {done_n}/{total}</div>"
         job_items.append(
             f"<div class='job-card'>"
             f"<div class='job-head'><div><b>#{j['id']}</b> {j['filename']}</div>"
             f"<span class='status {status_class}'>{j['status']}</span></div>"
             f"<div class='job-meta'>Created: {j.get('created_at','')} | Started: {j.get('started_at') or '-'} | Finished: {j.get('finished_at') or '-'}</div>"
+            f"{prog}"
             f"<div class='job-log'>{last_log or '-'}</div>"
             f"{f'<div class=\"job-err\">{err}</div>' if err else ''}"
             f"{preview}"
-            f"<div class='job-actions'>{actions} {out_link}</div>"
+            f"<div class='job-actions'>{actions} {out_link} {open_link}</div>"
             f"</div>"
+        )
+    summary_rows = []
+    for v in sorted(video_summary.values(), key=lambda x: str(x["source"]).lower()):
+        total = int(v["total_frames"])
+        proc = int(v["processed_frames"])
+        pct = int((proc / total) * 100) if total > 0 else 0
+        overall = (
+            "error"
+            if int(v["error"]) > 0
+            else "running"
+            if int(v["running"]) > 0
+            else "queued"
+            if int(v["queued"]) > 0
+            else "done"
+            if int(v["done"]) > 0
+            else "cancelled"
+        )
+        summary_rows.append(
+            f"<tr>"
+            f"<td>{v['source']}</td>"
+            f"<td>{overall}</td>"
+            f"<td>{v['queued']}</td>"
+            f"<td>{v['running']}</td>"
+            f"<td>{v['done']}</td>"
+            f"<td>{v['error']}</td>"
+            f"<td>{v['cancelled']}</td>"
+            f"<td>{proc}/{total} ({pct}%)</td>"
+            f"</tr>"
         )
     return f"""<!doctype html>
 <html><head><meta charset='utf-8'/>
@@ -119,6 +176,11 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
 .preview{{margin-top:10px;max-width:360px;border:1px solid #cbd5e1;border-radius:8px}}
 .job-actions{{margin-top:10px}}
 .link-btn{{display:inline-block;padding:6px 10px;background:#eef2ff;border:1px solid #c7d2fe;color:#3730a3;border-radius:8px;text-decoration:none;margin-right:8px}}
+.progress{{height:8px;background:#e2e8f0;border-radius:999px;overflow:hidden;margin-top:8px}}
+.bar{{height:100%;background:#3b82f6}}
+.tbl{{width:100%;border-collapse:collapse;font-size:13px}}
+.tbl th,.tbl td{{border:1px solid #e2e8f0;padding:8px;text-align:left}}
+.tbl th{{background:#f8fafc}}
 </style></head>
 <body><div class='wrap'>
 <div class='top'><div class='title'>Wildlife Processor</div><div class='badge'>{'Paused' if paused else 'Running'}</div></div>
@@ -154,6 +216,39 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
     </form>
   </div>
 </div>
+<div class='panel' style='margin-top:16px'>
+  <h3 style='margin-top:0'>Batch Queue From Folder</h3>
+  <form method='post' action='/enqueue-folder'>
+    <label>Folder Path (local on this machine)</label>
+    <input name='folder_path' value='{(VID_DIR).as_posix()}' />
+    <div style='height:8px'></div>
+    <label>Include extensions (comma-separated)</label>
+    <input name='exts' value='.mp4,.mov,.avi,.mkv,.jpg,.jpeg,.png,.webp' />
+    <div style='height:8px'></div>
+    <label>Frame rate (video)</label>
+    <input type='number' step='0.1' value='1' name='fps' />
+    <div style='height:8px'></div>
+    <label>ML URL</label>
+    <input name='ml_url' value='http://127.0.0.1:8010' />
+    <div style='height:8px'></div>
+    <label>Species URL</label>
+    <input name='species_url' value='http://127.0.0.1:8100' />
+    <div style='height:10px'></div>
+    <button class='btn' type='submit'>Enqueue Folder</button>
+    <a class='btn btn-subtle' href='/cleanup-output'>Cleanup Output Folder</a>
+  </form>
+</div>
+<div class='panel' style='margin-top:16px'>
+  <h3 style='margin-top:0'>Video / Source List</h3>
+  <table class='tbl'>
+    <thead>
+      <tr><th>Source</th><th>Overall</th><th>Queued</th><th>Running</th><th>Done</th><th>Error</th><th>Cancelled</th><th>Frame Progress</th></tr>
+    </thead>
+    <tbody>
+      {''.join(summary_rows) if summary_rows else '<tr><td colspan="8">No sources yet</td></tr>'}
+    </tbody>
+  </table>
+</div>
 <h3>Runs</h3>
 <div class='jobs'>{''.join(job_items)}</div>
 <script>setTimeout(()=>location.reload(),3000)</script>
@@ -186,12 +281,14 @@ def _worker_loop() -> None:
             else:
                 images = [input_path]
                 logger.info("job_id=%s stage=image_ready file=%s", jid, input_path.name)
+            db.set_total_items(jid, len(images))
             logger.info("job_id=%s stage=inference count=%s", jid, len(images))
             rows = process_images(
                 images,
                 out_dir,
                 ml_url=job.get("ml_url") or "http://127.0.0.1:8010",
                 species_url=job.get("species_url") or "http://127.0.0.1:8100",
+                progress_cb=lambda n, t, p: db.set_processed_items(jid, n),
             )
             db.append_log(jid, f"Done: {len(rows)} outputs")
             db.mark_done(jid, str(out_dir), rows)
@@ -273,4 +370,64 @@ async def retry(job_id: int) -> RedirectResponse:
 async def cancel(job_id: int) -> RedirectResponse:
     db.cancel_job(job_id)
     logger.info("job_id=%s action=cancel", job_id)
+    return RedirectResponse(url="/", status_code=303)
+
+
+@app.post("/enqueue-folder")
+async def enqueue_folder(
+    folder_path: str = Form(...),
+    exts: str = Form(".mp4,.mov,.avi,.mkv,.jpg,.jpeg,.png,.webp"),
+    fps: float = Form(1.0),
+    ml_url: str = Form("http://127.0.0.1:8010"),
+    species_url: str = Form("http://127.0.0.1:8100"),
+) -> HTMLResponse:
+    p = Path(folder_path)
+    if not p.is_dir():
+        return HTMLResponse(_render_page(f"Folder not found: {folder_path}"))
+    wanted = {x.strip().lower() for x in exts.split(",") if x.strip()}
+    files = [f for f in sorted(p.rglob("*")) if f.is_file() and f.suffix.lower() in wanted]
+    if not files:
+        return HTMLResponse(_render_page(f"No matching files in {folder_path}"))
+    q = 0
+    for f in files:
+        s = f.suffix.lower()
+        if s in SUPPORTED_VIDEOS:
+            mt = "video"
+        elif s in SUPPORTED_IMAGES:
+            mt = "image"
+        else:
+            continue
+        db.add_job(
+            filename=f.name,
+            media_type=mt,
+            input_path=str(f),
+            fps=max(0.1, float(fps)),
+            ml_url=ml_url,
+            species_url=species_url,
+        )
+        q += 1
+    logger.info("batch_enqueued count=%s folder=%s", q, folder_path)
+    return HTMLResponse(_render_page(f"Batch queued {q} file(s) from {folder_path}."))
+
+
+@app.get("/open-output/{job_id}")
+async def open_output(job_id: int) -> RedirectResponse:
+    j = db.get_job(job_id)
+    if j and j.get("output_dir"):
+        p = Path(j["output_dir"])
+        if p.is_dir():
+            if os.name == "nt":
+                os.startfile(str(p))  # type: ignore[attr-defined]
+            elif os.name == "posix":
+                subprocess.Popen(["xdg-open", str(p)])
+    return RedirectResponse(url="/", status_code=303)
+
+
+@app.get("/cleanup-output")
+async def cleanup_output() -> RedirectResponse:
+    if OUT_DIR.is_dir():
+        for d in OUT_DIR.glob("run_*"):
+            if d.is_dir():
+                shutil.rmtree(d, ignore_errors=True)
+    logger.info("cleanup_output done")
     return RedirectResponse(url="/", status_code=303)

@@ -217,5 +217,6 @@ test-media/input/*.jpg
 test-media/input/*.jpeg
 test-media/input/*.png
 test-media/input/*.webp
-test-media/output/*.ml.json
-test-media/output/*.species.json
+test-media/output/*/*.ml.json
+test-media/output/*/*.species.json
+test-media/output/*/*.annotated.jpg

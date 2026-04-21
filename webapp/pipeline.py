@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import requests
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 
 SUPPORTED_IMAGES = {".jpg", ".jpeg", ".png", ".webp"}
@@ -80,6 +80,15 @@ def call_species(image_path: Path, species_url: str) -> dict[str, Any]:
 def draw_boxes(image_path: Path, det: dict[str, Any], out_path: Path, species_label: str | None = None) -> None:
     im = Image.open(image_path).convert("RGB")
     d = ImageDraw.Draw(im)
+    w, h = im.size
+    font_size = max(14, min(26, int(h * 0.028)))
+    try:
+        font = ImageFont.truetype("arial.ttf", font_size)
+    except Exception:
+        font = ImageFont.load_default()
+    clean_species = None
+    if species_label and isinstance(species_label, str):
+        clean_species = species_label.replace("_", " ").strip().title()
     for obj in det.get("objects") or []:
         bbox = obj.get("bbox")
         if not isinstance(bbox, list) or len(bbox) != 4:
@@ -87,8 +96,16 @@ def draw_boxes(image_path: Path, det: dict[str, Any], out_path: Path, species_la
         x1, y1, x2, y2 = bbox
         d.rectangle((x1, y1, x2, y2), outline=(144, 238, 144), width=3)
         base = f"{obj.get('class', '?')} {float(obj.get('confidence', 0.0)):.2f}"
-        label = base if not species_label else f"{base} | {species_label}"
-        d.text((x1 + 2, max(y1 - 12, 0)), label, fill=(144, 238, 144))
+        label = base if not clean_species else f"{base} | {clean_species}"
+        tx = int(x1 + 4)
+        ty = int(max(0, y1 - font_size - 8))
+        try:
+            l, t, r, b = d.textbbox((0, 0), label, font=font)
+            tw, th = (r - l), (b - t)
+        except Exception:
+            tw, th = (len(label) * max(8, font_size // 2), font_size + 4)
+        d.rectangle((tx - 3, ty - 2, tx + tw + 4, ty + th + 2), fill=(15, 23, 42))
+        d.text((tx, ty), label, fill=(167, 243, 208), font=font)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     im.save(out_path)
 
@@ -98,10 +115,11 @@ def process_images(
     output_dir: Path,
     ml_url: str,
     species_url: str,
+    progress_cb: Any | None = None,
 ) -> list[dict[str, str]]:
     output_dir.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, str]] = []
-    for img in images:
+    for idx, img in enumerate(images, start=1):
         name = img.stem
         ml_json = output_dir / f"{name}.ml.json"
         sp_json = output_dir / f"{name}.species.json"
@@ -120,4 +138,6 @@ def process_images(
                 "annotated": str(ann_img),
             }
         )
+        if progress_cb is not None:
+            progress_cb(idx, len(images), img)
     return rows

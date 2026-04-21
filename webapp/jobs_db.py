@@ -29,6 +29,8 @@ class JobsDb:
                     fps REAL NOT NULL DEFAULT 1.0,
                     ml_url TEXT,
                     species_url TEXT,
+                    total_items INTEGER NOT NULL DEFAULT 0,
+                    processed_items INTEGER NOT NULL DEFAULT 0,
                     status TEXT NOT NULL DEFAULT 'queued',
                     created_at TEXT NOT NULL DEFAULT (datetime('now')),
                     started_at TEXT,
@@ -56,6 +58,10 @@ class JobsDb:
                 c.execute("ALTER TABLE jobs ADD COLUMN ml_url TEXT")
             if "species_url" not in cols:
                 c.execute("ALTER TABLE jobs ADD COLUMN species_url TEXT")
+            if "total_items" not in cols:
+                c.execute("ALTER TABLE jobs ADD COLUMN total_items INTEGER NOT NULL DEFAULT 0")
+            if "processed_items" not in cols:
+                c.execute("ALTER TABLE jobs ADD COLUMN processed_items INTEGER NOT NULL DEFAULT 0")
             c.commit()
 
     def add_job(
@@ -157,7 +163,8 @@ class JobsDb:
             c.execute(
                 """
                 UPDATE jobs
-                SET status='queued', started_at=NULL, finished_at=NULL, error_text=NULL
+                SET status='queued', started_at=NULL, finished_at=NULL, error_text=NULL,
+                    total_items=0, processed_items=0
                 WHERE id=?
                 """,
                 (job_id,),
@@ -169,5 +176,26 @@ class JobsDb:
             c.execute(
                 "UPDATE jobs SET status='cancelled', finished_at=datetime('now') WHERE id=? AND status='queued'",
                 (job_id,),
+            )
+            c.commit()
+
+    def get_job(self, job_id: int) -> dict[str, Any] | None:
+        with self._connect() as c:
+            row = c.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+            return dict(row) if row else None
+
+    def set_total_items(self, job_id: int, total: int) -> None:
+        with self._connect() as c:
+            c.execute(
+                "UPDATE jobs SET total_items=?, processed_items=0 WHERE id=?",
+                (max(0, int(total)), job_id),
+            )
+            c.commit()
+
+    def set_processed_items(self, job_id: int, processed: int) -> None:
+        with self._connect() as c:
+            c.execute(
+                "UPDATE jobs SET processed_items=? WHERE id=?",
+                (max(0, int(processed)), job_id),
             )
             c.commit()

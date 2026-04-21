@@ -89,6 +89,9 @@ You can run a local Python web app that does:
 - pause/resume processing (n8n-like run control)
 - retry/cancel controls from the UI
 - inline preview of generated annotated frames/images
+- batch enqueue from a folder path (videos and/or images)
+- open output folder from UI and cleanup output runs
+- source/video summary table with per-source status and frame progress
 
 Start services first (include species):
 
@@ -108,6 +111,14 @@ Open:
 
 - `http://localhost:8110`
 - The app binds to `127.0.0.1` (localhost only) by default.
+
+### Web app batch flow
+
+1. In **Batch Queue From Folder**, set a local folder path.
+2. Choose extensions to include (video/image).
+3. Click **Enqueue Folder**.
+4. Monitor per-job progress (`processed/total`) in Runs.
+5. Use **Open Folder** on completed jobs for direct output access.
 
 To include species outputs, start stack with species profile first:
 
