@@ -331,7 +331,7 @@ def _render_page(
         open_link = ""
         if out_dir:
             try:
-                rel = Path(out_dir).relative_to(ROOT).as_posix()
+                Path(out_dir).relative_to(ROOT)
                 out_link = f"<a class='link-btn' href='/browse-output/{j['id']}'>Output Browser</a>"
                 open_link = f"<a class='link-btn' href='/open-output/{j['id']}'>Open Folder</a>"
             except Exception:
@@ -343,6 +343,7 @@ def _render_page(
         if total > 0:
             pct = int((done_n / total) * 100)
             prog = f"<div class='progress'><div class='bar' style='width:{pct}%'></div></div><div class='job-meta'>Progress: {done_n}/{total}</div>"
+        err_html = f'<div class="job-err">{html.escape(err)}</div>' if err else ""
         job_items.append(
             f"<div class='job-card'>"
             f"<div class='job-head'><div><b>#{j['id']}</b> {j['filename']}</div>"
@@ -350,7 +351,7 @@ def _render_page(
             f"<div class='job-meta'>Created: {j.get('created_at','')} | Started: {j.get('started_at') or '-'} | Finished: {j.get('finished_at') or '-'}</div>"
             f"{prog}"
             f"<div class='job-log'>{last_log or '-'}</div>"
-            f"{f'<div class=\"job-err\">{err}</div>' if err else ''}"
+            f"{err_html}"
             f"{preview}"
             f"<div class='job-actions'>{actions} {out_link} {open_link}</div>"
             f"</div>"

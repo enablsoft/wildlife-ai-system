@@ -1,7 +1,11 @@
 # Install dependencies, lint, and run tests on pushes/PRs to main.
 # If workflows do not run: repo Settings → Actions → General → allow Actions.
+# Use checkout@v5 for current Actions runner Node runtime (see GitHub changelog).
 
 name: Python application
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 on:
   push:
@@ -17,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python 3.10
         uses: actions/setup-python@v5
