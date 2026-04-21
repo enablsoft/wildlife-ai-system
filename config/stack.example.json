@@ -8,5 +8,9 @@
     "media_root_in_container": "/data/media",
     "batch_ui_public_url": "http://localhost:8090",
     "ml_service_url": "http://localhost:8010"
+  },
+  "species": {
+    "enabled": false,
+    "species_service_public_url": "http://localhost:8100"
   }
 }

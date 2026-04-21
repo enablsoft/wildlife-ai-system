@@ -18,6 +18,26 @@ services:
       retries: 8
       start_period: 180s
 
+  species-service:
+    image: ${SPECIES_SERVICE_IMAGE:-ghcr.io/enablsoft/wildlife-ai-species-service:local}
+    container_name: wildlife-ai-species-service
+    profiles: ["species"]
+    ports:
+      - "${SPECIES_SERVICE_PORT:-8100}:8001"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=5)",
+        ]
+      interval: 20s
+      timeout: 10s
+      retries: 8
+      start_period: 180s
+
   batch-ui:
     image: ${BATCH_UI_IMAGE:?Set BATCH_UI_IMAGE in .env}
     container_name: wildlife-ai-batch-ui

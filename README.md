@@ -4,22 +4,30 @@ Public deployment repo for prebuilt containers:
 
 - `ghcr.io/enablsoft/wildlife-ai-ml-service`
 - `ghcr.io/enablsoft/wildlife-ai-batch-ui`
+- `ghcr.io/enablsoft/wildlife-ai-species-service` (optional species profile)
 
 This repo intentionally contains only runtime configuration, compose files, and helper scripts.
 
 ## Quick start
 
 1. Copy `.env.example` to `.env` and adjust image tags/ports if needed.
-2. Start:
+2. Start core stack:
 
 ```powershell
 docker compose --env-file .env up -d
+```
+
+Optional: include species service:
+
+```powershell
+docker compose --env-file .env --profile species up -d
 ```
 
 3. Verify:
 
 - Detector: `http://localhost:8010/health`
 - Batch UI: `http://localhost:8090/health`
+- Species (if enabled): `http://localhost:8100/health`
 
 4. Stop:
 
@@ -32,6 +40,13 @@ docker compose --env-file .env down
 - Host `./data` mounts to `/data` in `batch-ui`.
 - Host `./media` mounts to `/data/media` in `batch-ui`.
 - Host `./config` mounts read-only to `/app/config`.
+
+## Species service
+
+- `species-service` is dockerized as an **optional profile** (`species`) so the base stack still runs if species image is not needed.
+- Enable it only when you want species classification endpoints:
+  - `docker compose --env-file .env --profile species up -d`
+- Configure image/tag via `SPECIES_SERVICE_IMAGE` in `.env`.
 
 `config/stack.example.json` shows container-side defaults for:
 
