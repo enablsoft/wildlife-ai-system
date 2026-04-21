@@ -48,20 +48,31 @@ docker compose --env-file .env down
   - `docker compose --env-file .env --profile species up -d`
 - Configure image/tag via `SPECIES_SERVICE_IMAGE` in `.env`.
 
-## Test folder workflow (input/output)
+## Test-media workflow (terminal)
 
 Use the built-in test workspace:
 
-- Put test images in `test/input/` (`.jpg`, `.jpeg`, `.png`, `.webp`).
-- Run:
+- Put test images in `test-media/input/` (`.jpg`, `.jpeg`, `.png`, `.webp`).
+- Run image test from terminal:
 
 ```powershell
 .\scripts\test-local.ps1
 ```
 
-- Inspect results in `test/output/`:
+- Inspect results in `test-media/output/`:
   - `<name>.ml.json` (MegaDetector response)
   - `<name>.species.json` (SpeciesNet response)
+
+Video test from terminal:
+
+1. Put a video in `test-media/video/` (`.mp4`, `.mov`, `.avi`, `.mkv`).
+2. Run:
+
+```powershell
+.\scripts\test-video.ps1
+```
+
+This extracts frames to `test-media/input/` and then runs `test-local.ps1`, writing JSON outputs to `test-media/output/`.
 
 To include species outputs, start stack with species profile first:
 

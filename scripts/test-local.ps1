@@ -15,8 +15,8 @@ Get-Content ".env" | ForEach-Object {
 $mlPort = if ($env:ML_SERVICE_PORT) { $env:ML_SERVICE_PORT } else { "8010" }
 $speciesPort = if ($env:SPECIES_SERVICE_PORT) { $env:SPECIES_SERVICE_PORT } else { "8100" }
 
-$inputDir = Join-Path (Get-Location) "test\\input"
-$outputDir = Join-Path (Get-Location) "test\\output"
+$inputDir = Join-Path (Get-Location) "test-media\\input"
+$outputDir = Join-Path (Get-Location) "test-media\\output"
 New-Item -ItemType Directory -Force -Path $inputDir | Out-Null
 New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 
@@ -26,7 +26,7 @@ $images = $images | Sort-Object FullName -Unique
 
 if (-not $images -or $images.Count -eq 0) {
     Write-Host "No images found in $inputDir"
-    Write-Host "Copy .jpg/.jpeg/.png/.webp files into test/input and rerun."
+    Write-Host "Copy .jpg/.jpeg/.png/.webp files into test-media/input and rerun."
     exit 1
 }
 
@@ -60,4 +60,4 @@ foreach ($img in $images) {
     }
 }
 
-Write-Host "Done. Open test/output to inspect results."
+Write-Host "Done. Open test-media/output to inspect results."
