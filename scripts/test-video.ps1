@@ -1,6 +1,24 @@
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path -Parent $PSScriptRoot)
 
+function Ensure-Ffmpeg {
+    if (Get-Command ffmpeg -ErrorAction SilentlyContinue) {
+        return $true
+    }
+    Write-Host "ffmpeg not found. Attempting automatic install via winget..."
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Write-Host "winget is not available. Install ffmpeg manually and rerun."
+        return $false
+    }
+    winget install --id Gyan.FFmpeg -e --source winget --accept-package-agreements --accept-source-agreements
+    $ff = Get-Command ffmpeg -ErrorAction SilentlyContinue
+    if ($ff) {
+        return $true
+    }
+    Write-Host "ffmpeg install may require terminal restart. Close/reopen terminal and rerun."
+    return $false
+}
+
 $videoDir = Join-Path (Get-Location) "test-media\\video"
 $framesDir = Join-Path (Get-Location) "test-media\\input"
 
@@ -14,9 +32,7 @@ if (-not $videos -or $videos.Count -eq 0) {
     exit 1
 }
 
-if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
-    Write-Host "ffmpeg not found in PATH."
-    Write-Host "Install ffmpeg, then rerun scripts/test-video.ps1."
+if (-not (Ensure-Ffmpeg)) {
     exit 1
 }
 

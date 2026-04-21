@@ -74,6 +74,8 @@ Video test from terminal:
 
 This extracts frames to `test-media/input/` and then runs `test-local.ps1`, writing JSON outputs to `test-media/output/`.
 
+`test-video.ps1` will try to auto-install ffmpeg on Windows using `winget` if ffmpeg is missing.
+
 ## Python web app interface (automatic processing)
 
 You can run a local Python web app that does:
@@ -99,6 +101,8 @@ Run web app:
 ```powershell
 .\scripts\run-webapp.ps1
 ```
+
+`run-webapp.ps1` also attempts ffmpeg auto-install (via `winget`) so video uploads work out-of-the-box on Windows.
 
 Open:
 

@@ -43,6 +43,7 @@ def _render_page(msg: str = "") -> str:
                 preview = ""
         logs = (j.get("logs") or "").strip().splitlines()
         last_log = logs[-1] if logs else ""
+        err = j.get("error_text") or ""
         actions = ""
         if j["status"] in ("error", "cancelled"):
             actions += f"<a href='/retry/{j['id']}'>retry</a> "
@@ -51,7 +52,9 @@ def _render_page(msg: str = "") -> str:
         job_items.append(
             f"<li><b>#{j['id']}</b> {j['filename']} [{j['status']}] "
             f"<small>{j.get('created_at','')}</small>"
-            f"<br/><small>{last_log}</small>{preview}<br/>{actions}</li>"
+            f"<br/><small>{last_log}</small>"
+            f"{f'<br/><code>{err}</code>' if err else ''}"
+            f"{preview}<br/>{actions}</li>"
         )
     return f"""<!doctype html>
 <html><body style='font-family:Arial,sans-serif;max-width:980px;margin:1.5rem auto'>
