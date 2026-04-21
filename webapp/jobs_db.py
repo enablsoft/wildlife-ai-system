@@ -247,6 +247,20 @@ class JobsDb:
             row = c.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
             return dict(row) if row else None
 
+    def latest_job_for_input(self, input_path: str, media_type: str) -> dict[str, Any] | None:
+        with self._connect() as c:
+            row = c.execute(
+                """
+                SELECT id, status, filename, finished_at
+                FROM jobs
+                WHERE input_path=? AND media_type=?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (input_path, media_type),
+            ).fetchone()
+            return dict(row) if row else None
+
     def set_total_items(self, job_id: int, total: int) -> None:
         with self._connect() as c:
             c.execute(

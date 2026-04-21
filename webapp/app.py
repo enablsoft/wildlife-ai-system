@@ -13,9 +13,12 @@ from urllib.parse import quote_plus
 from datetime import datetime
 from pathlib import Path
 
+from typing import Any
+
 from fastapi import FastAPI, File, Form, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 from webapp.jobs_db import JobsDb
 from webapp.pipeline import SUPPORTED_IMAGES, SUPPORTED_VIDEOS, extract_frames, process_images
@@ -50,6 +53,26 @@ def _norm_path(p: Path) -> str:
         return str(p.resolve()).lower()
     except Exception:
         return str(p).lower()
+
+
+def _parse_exts(exts: str) -> set[str]:
+    return {x.strip().lower() for x in (exts or "").split(",") if x.strip()}
+
+
+def _folder_media_index(p: Path, wanted: set[str]) -> dict[str, tuple[Path, str]]:
+    idx: dict[str, tuple[Path, str]] = {}
+    for f in sorted(p.rglob("*")):
+        if not f.is_file() or f.suffix.lower() not in wanted:
+            continue
+        s = f.suffix.lower()
+        if s in SUPPORTED_VIDEOS:
+            mt = "video"
+        elif s in SUPPORTED_IMAGES:
+            mt = "image"
+        else:
+            continue
+        idx[_norm_path(f)] = (f, mt)
+    return idx
 
 
 def _enqueue_uploaded_file(
@@ -361,6 +384,16 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
 .tabs{{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}}
 .tab-btn{{padding:8px 10px;border-radius:8px;border:1px solid #c7d2fe;background:#eef2ff;color:#3730a3;cursor:pointer}}
 .tab-btn.active{{background:#3730a3;color:#fff;border-color:#3730a3}}
+.app-modal{{position:fixed;inset:0;z-index:10000;display:none;align-items:center;justify-content:center}}
+.app-modal.show{{display:flex}}
+.app-modal-backdrop{{position:absolute;inset:0;background:rgba(15,23,42,.55)}}
+.app-modal-box{{position:relative;z-index:1;background:#fff;border-radius:12px;padding:18px;max-width:min(720px,94vw);max-height:min(88vh,900px);overflow:auto;box-shadow:0 10px 40px rgba(0,0,0,.2)}}
+.app-modal-title{{font-size:18px;font-weight:700;margin-bottom:10px;color:#0f172a}}
+.app-modal-body{{margin-bottom:14px;font-size:14px;color:#334155;line-height:1.45}}
+.app-modal-actions{{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}}
+.enqueue-row{{display:flex;align-items:flex-start;gap:8px;padding:8px;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:6px;background:#f8fafc}}
+.enqueue-row.disabled{{opacity:.65}}
+.enqueue-meta{{font-size:12px;color:#64748b}}
 .viewer-overlay{{position:fixed;inset:0;background:rgba(2,6,23,.72);display:none;align-items:center;justify-content:center;z-index:9999}}
 .viewer-box{{width:min(96vw,1200px);height:min(92vh,900px);background:#0b1220;border-radius:10px;padding:10px;display:grid;grid-template-rows:auto auto 1fr;gap:8px}}
 .viewer-top{{display:flex;justify-content:space-between;align-items:center;color:#e2e8f0}}
@@ -416,23 +449,23 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
 </div>
 <div class='panel' style='margin-top:16px'>
   <h3 style='margin-top:0'>Batch Queue From Folder</h3>
-  <form method='post' action='/enqueue-folder'>
+  <form id='enqueueFolderForm' onsubmit='return false;'>
     <label>Folder Path (local on this machine)</label>
-    <input name='folder_path' value='{(VID_DIR).as_posix()}' />
+    <input id='enqueueFolderPath' name='folder_path' value='{(VID_DIR).as_posix()}' />
     <div style='height:8px'></div>
     <label>Include extensions (comma-separated)</label>
-    <input name='exts' value='.mp4,.mov,.avi,.mkv,.jpg,.jpeg,.png,.webp' />
+    <input id='enqueueExts' name='exts' value='.mp4,.mov,.avi,.mkv,.jpg,.jpeg,.png,.webp' />
     <div style='height:8px'></div>
     <label>Frame rate (video)</label>
-    <input type='number' step='0.1' value='1' name='fps' />
+    <input id='enqueueFps' type='number' step='0.1' value='1' name='fps' />
     <div style='height:8px'></div>
     <label>ML URL</label>
     <input name='ml_url' value='http://127.0.0.1:8010' />
     <div style='height:8px'></div>
     <label>Species URL</label>
-    <input name='species_url' value='http://127.0.0.1:8100' />
+    <input id='enqueueSpecies' name='species_url' value='http://127.0.0.1:8100' />
     <div style='height:10px'></div>
-    <button class='btn' type='submit'>Enqueue Folder</button>
+    <button class='btn' type='button' id='btnEnqueuePreview' onclick='previewEnqueueFolder()'>Preview &amp; queue</button>
     <a class='btn btn-subtle js-action' href='/cleanup-output' data-confirm='Delete all run_* output folders under test-media/output? Active job output folders are skipped.'>Cleanup Output Folder</a>
   </form>
 </div>
@@ -487,6 +520,29 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
   <h3>Runs</h3>
   <div class='jobs'>{''.join(job_items)}</div>
 </div>
+<div id='appConfirmModal' class='app-modal' role='dialog' aria-modal='true'>
+  <div class='app-modal-backdrop' id='appConfirmBackdrop'></div>
+  <div class='app-modal-box'>
+    <div id='appConfirmTitle' class='app-modal-title'>Please confirm</div>
+    <div id='appConfirmBody' class='app-modal-body'></div>
+    <div class='app-modal-actions'>
+      <button type='button' class='btn btn-subtle' id='appConfirmCancel'>Cancel</button>
+      <button type='button' class='btn' id='appConfirmOk'>OK</button>
+    </div>
+  </div>
+</div>
+<div id='enqueuePreviewModal' class='app-modal' role='dialog' aria-modal='true'>
+  <div class='app-modal-backdrop' id='enqueuePreviewBackdrop'></div>
+  <div class='app-modal-box' style='max-width:min(860px,96vw)'>
+    <div class='app-modal-title'>Review media to queue</div>
+    <div id='enqueuePreviewSummary' class='job-meta'></div>
+    <div id='enqueuePreviewList'></div>
+    <div class='app-modal-actions'>
+      <button type='button' class='btn btn-subtle' id='enqueuePreviewCancel'>Cancel</button>
+      <button type='button' class='btn' id='enqueuePreviewOk'>Queue selected</button>
+    </div>
+  </div>
+</div>
 <div id='viewerOverlay' class='viewer-overlay'>
   <div class='viewer-box'>
     <div class='viewer-top'>
@@ -511,6 +567,131 @@ const FRAME_RECORDS = {records_json};
 let CURRENT_ZOOM = 100;
 let ACTIVE_VIDEO = '';
 let ACTIVE_FRAME = '';
+let _confirmResolve = null;
+let _enqueuePreviewState = null;
+function openConfirmModal(message) {{
+  return new Promise((resolve) => {{
+    _confirmResolve = resolve;
+    const b = document.getElementById('appConfirmBody');
+    if (b) b.textContent = message;
+    document.getElementById('appConfirmModal')?.classList.add('show');
+  }});
+}}
+function closeConfirmModal(ok) {{
+  document.getElementById('appConfirmModal')?.classList.remove('show');
+  if (_confirmResolve) {{
+    _confirmResolve(!!ok);
+    _confirmResolve = null;
+  }}
+}}
+function closeEnqueuePreview() {{
+  document.getElementById('enqueuePreviewModal')?.classList.remove('show');
+  _enqueuePreviewState = null;
+}}
+function esc(s) {{
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;');
+}}
+async function previewEnqueueFolder() {{
+  const folder = document.getElementById('enqueueFolderPath')?.value || '';
+  const exts = document.getElementById('enqueueExts')?.value || '';
+  const res = await fetch('/api/enqueue-folder-preview', {{
+    method: 'POST',
+    headers: {{ 'Content-Type': 'application/json' }},
+    body: JSON.stringify({{ folder_path: folder, exts: exts }}),
+  }});
+  const data = await res.json();
+  if (!data.ok) {{
+    await openConfirmModal(data.error || 'Preview failed');
+    return;
+  }}
+  const items = data.items || [];
+  if (items.length === 0) {{
+    await openConfirmModal('No matching media files in that folder.');
+    return;
+  }}
+  const fps = document.getElementById('enqueueFps')?.value || '1';
+  const ml = document.getElementById('enqueueMl')?.value || 'http://127.0.0.1:8010';
+  const sp = document.getElementById('enqueueSpecies')?.value || 'http://127.0.0.1:8100';
+  _enqueuePreviewState = {{ folder: folder, exts: exts, fps: fps, ml_url: ml, species_url: sp, items: items }};
+  const done = items.filter((x) => x.prior_status === 'done').length;
+  const active = items.filter((x) => x.prior_status === 'queued' || x.prior_status === 'running').length;
+  const sum = document.getElementById('enqueuePreviewSummary');
+  if (sum) sum.textContent = `${{items.length}} file(s) found — ${{done}} previously completed, ${{active}} already in queue.`;
+  const list = document.getElementById('enqueuePreviewList');
+  if (!list) return;
+  list.innerHTML = '';
+  list.style.maxHeight = '48vh';
+  list.style.overflow = 'auto';
+  items.forEach((it) => {{
+    const st = it.prior_status;
+    const row = document.createElement('div');
+    row.className = 'enqueue-row' + ((st === 'queued' || st === 'running') ? ' disabled' : '');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.dataset.path = it.input_path;
+    if (st === 'queued' || st === 'running') {{
+      cb.disabled = true;
+      cb.checked = false;
+    }} else if (st === 'done') {{
+      cb.disabled = false;
+      cb.checked = false;
+    }} else {{
+      cb.disabled = false;
+      cb.checked = true;
+    }}
+    const label = document.createElement('label');
+    label.style.flex = '1';
+    let note = 'new';
+    if (st === 'done') note = `processed (job #${{it.prior_job_id || '?'}})`;
+    else if (st === 'queued' || st === 'running') note = `in queue (job #${{it.prior_job_id || '?'}})`;
+    else if (st) note = `last: ${{st}} (#${{it.prior_job_id || '?'}})`;
+    label.innerHTML = `<b>${{esc(it.filename)}}</b> <span class='enqueue-meta'>(${{it.media_type}}) — ${{esc(note)}}</span>`;
+    row.appendChild(cb);
+    row.appendChild(label);
+    list.appendChild(row);
+  }});
+  document.getElementById('enqueuePreviewModal')?.classList.add('show');
+}}
+async function commitEnqueuePreview() {{
+  if (!_enqueuePreviewState) return;
+  const paths = [];
+  document.querySelectorAll('#enqueuePreviewList input[type=checkbox]').forEach((cb) => {{
+    if (!cb.disabled && cb.checked && cb.dataset.path) paths.push(cb.dataset.path);
+  }});
+  if (paths.length === 0) {{
+    await openConfirmModal('Select at least one file to queue (enable checkbox for completed items to re-run).');
+    return;
+  }}
+  const body = {{
+    folder_path: _enqueuePreviewState.folder,
+    exts: _enqueuePreviewState.exts,
+    fps: Number(_enqueuePreviewState.fps) || 1,
+    ml_url: _enqueuePreviewState.ml_url,
+    species_url: _enqueuePreviewState.species_url,
+    input_paths: paths,
+  }};
+  const res = await fetch('/api/enqueue-folder-commit', {{
+    method: 'POST',
+    headers: {{ 'Content-Type': 'application/json' }},
+    body: JSON.stringify(body),
+  }});
+  const data = await res.json();
+  closeEnqueuePreview();
+  if (!data.ok) {{
+    await openConfirmModal(data.error || 'Queue failed');
+    return;
+  }}
+  const u = new URL(window.location.origin + '/');
+  u.searchParams.set('msg', data.message || 'Queued.');
+  window.location.href = u.toString();
+}}
+(function initModals() {{
+  document.getElementById('appConfirmOk')?.addEventListener('click', () => closeConfirmModal(true));
+  document.getElementById('appConfirmCancel')?.addEventListener('click', () => closeConfirmModal(false));
+  document.getElementById('appConfirmBackdrop')?.addEventListener('click', () => closeConfirmModal(false));
+  document.getElementById('enqueuePreviewCancel')?.addEventListener('click', () => closeEnqueuePreview());
+  document.getElementById('enqueuePreviewBackdrop')?.addEventListener('click', () => closeEnqueuePreview());
+}})();
 window.addEventListener('beforeunload', () => {{
   sessionStorage.setItem(SCROLL_KEY, String(window.scrollY || 0));
 }});
@@ -531,8 +712,9 @@ document.querySelectorAll('a.js-action').forEach((el) => {{
     const href = el.getAttribute('href');
     if (!href) return;
     const confirmMsg = el.getAttribute('data-confirm');
-    if (confirmMsg && !window.confirm(confirmMsg)) {{
-      return;
+    if (confirmMsg) {{
+      const ok = await openConfirmModal(confirmMsg);
+      if (!ok) return;
     }}
     sessionStorage.setItem(SCROLL_KEY, String(window.scrollY || 0));
     try {{
@@ -719,6 +901,84 @@ setTimeout(() => {{
 </div></body></html>"""
 
 
+class EnqueueFolderPreviewIn(BaseModel):
+    folder_path: str
+    exts: str = ".mp4,.mov,.avi,.mkv,.jpg,.jpeg,.png,.webp"
+
+
+class EnqueueFolderCommitIn(BaseModel):
+    folder_path: str
+    exts: str = ".mp4,.mov,.avi,.mkv,.jpg,.jpeg,.png,.webp"
+    fps: float = 1.0
+    ml_url: str = "http://127.0.0.1:8010"
+    species_url: str = "http://127.0.0.1:8100"
+    input_paths: list[str] = Field(default_factory=list)
+
+
+@app.post("/api/enqueue-folder-preview")
+async def api_enqueue_folder_preview(body: EnqueueFolderPreviewIn) -> JSONResponse:
+    raw = (body.folder_path or "").strip().strip('"').strip("'")
+    p = Path(raw)
+    if not p.is_dir():
+        return JSONResponse({"ok": False, "error": f"Folder not found: {raw}"}, status_code=400)
+    wanted = _parse_exts(body.exts)
+    try:
+        idx = _folder_media_index(p, wanted)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    items: list[dict[str, Any]] = []
+    for norm, (fp, mt) in sorted(idx.items(), key=lambda kv: kv[1][0].name.lower()):
+        prior = db.latest_job_for_input(norm, mt)
+        pst = str(prior["status"]) if prior else None
+        pid = int(prior["id"]) if prior else None
+        items.append(
+            {
+                "filename": fp.name,
+                "media_type": mt,
+                "input_path": norm,
+                "prior_status": pst,
+                "prior_job_id": pid,
+            }
+        )
+    return JSONResponse({"ok": True, "folder": raw, "items": items})
+
+
+@app.post("/api/enqueue-folder-commit")
+async def api_enqueue_folder_commit(body: EnqueueFolderCommitIn) -> JSONResponse:
+    raw = (body.folder_path or "").strip().strip('"').strip("'")
+    p = Path(raw)
+    if not p.is_dir():
+        return JSONResponse({"ok": False, "error": f"Folder not found: {raw}"}, status_code=400)
+    wanted = _parse_exts(body.exts)
+    try:
+        idx = _folder_media_index(p, wanted)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    q = 0
+    skipped = 0
+    missing = 0
+    for norm in body.input_paths:
+        if norm not in idx:
+            missing += 1
+            continue
+        f, mt = idx[norm]
+        jid = db.add_job(
+            filename=f.name,
+            media_type=mt,
+            input_path=norm,
+            fps=max(0.1, float(body.fps)),
+            ml_url=body.ml_url,
+            species_url=body.species_url,
+        )
+        if jid < 0:
+            skipped += 1
+        else:
+            q += 1
+    logger.info("batch_enqueued_commit count=%s skipped=%s missing=%s folder=%s", q, skipped, missing, raw)
+    msg = f"Queued {q} file(s), skipped {skipped} active duplicate(s), {missing} path(s) not in folder."
+    return JSONResponse({"ok": True, "queued": q, "skipped": skipped, "missing": missing, "message": msg})
+
+
 def _worker_loop() -> None:
     logger.info("Worker loop started")
     while not _stop_worker:
@@ -851,57 +1111,6 @@ async def cancel(job_id: int) -> RedirectResponse:
     db.cancel_job(job_id)
     logger.info("job_id=%s action=cancel", job_id)
     return RedirectResponse(url="/", status_code=303)
-
-
-@app.post("/enqueue-folder")
-async def enqueue_folder(
-    folder_path: str = Form(...),
-    exts: str = Form(".mp4,.mov,.avi,.mkv,.jpg,.jpeg,.png,.webp"),
-    fps: float = Form(1.0),
-    ml_url: str = Form("http://127.0.0.1:8010"),
-    species_url: str = Form("http://127.0.0.1:8100"),
-) -> HTMLResponse:
-    raw_folder = (folder_path or "").strip().strip('"').strip("'")
-    p = Path(raw_folder)
-    if not p.is_dir():
-        return RedirectResponse(url=f"/?msg={quote_plus(f'Folder not found: {raw_folder}')}", status_code=303)
-    wanted = {x.strip().lower() for x in exts.split(",") if x.strip()}
-    try:
-        files = [f for f in sorted(p.rglob("*")) if f.is_file() and f.suffix.lower() in wanted]
-    except Exception as e:
-        return RedirectResponse(
-            url=f"/?msg={quote_plus(f'Cannot access folder: {raw_folder} ({e})')}",
-            status_code=303,
-        )
-    if not files:
-        return RedirectResponse(url=f"/?msg={quote_plus(f'No matching files in {raw_folder}')}", status_code=303)
-    q = 0
-    skipped = 0
-    for f in files:
-        s = f.suffix.lower()
-        if s in SUPPORTED_VIDEOS:
-            mt = "video"
-        elif s in SUPPORTED_IMAGES:
-            mt = "image"
-        else:
-            continue
-        jid = db.add_job(
-            filename=f.name,
-            media_type=mt,
-            input_path=_norm_path(f),
-            fps=max(0.1, float(fps)),
-            ml_url=ml_url,
-            species_url=species_url,
-        )
-        if jid < 0:
-            skipped += 1
-        else:
-            q += 1
-    logger.info("batch_enqueued count=%s skipped=%s folder=%s", q, skipped, raw_folder)
-    return RedirectResponse(
-        url=f"/?msg={quote_plus(f'Batch queued {q} file(s), skipped {skipped} existing file(s) from {raw_folder}.')}",
-        status_code=303,
-    )
 
 
 @app.get("/cancel-all")
