@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import html
+import re
 import subprocess
 import shutil
 import threading
@@ -38,8 +40,89 @@ if not logger.handlers:
     )
 
 
+def _safe_rel(path_str: str) -> str:
+    return Path(path_str).relative_to(ROOT).as_posix()
+
+
+def _clean_species(value: str | None) -> str:
+    if not value:
+        return "Unknown"
+    return value.replace("_", " ").strip().title()
+
+
+def _frame_records(jobs: list[dict[str, object]]) -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
+    for j in jobs:
+        if j.get("status") != "done" or not j.get("outputs_json"):
+            continue
+        source = Path(str(j.get("input_path") or j.get("filename") or "")).name
+        try:
+            outputs = json.loads(str(j["outputs_json"]))
+        except Exception:
+            continue
+        if not isinstance(outputs, list):
+            continue
+        for row in outputs:
+            if not isinstance(row, dict):
+                continue
+            ann = str(row.get("annotated") or "")
+            frame_name = Path(str(row.get("input") or "")).name
+            species = "Unknown"
+            species_conf = ""
+            det_class = "Unknown"
+            det_conf = ""
+            sp_path = Path(str(row.get("species_json") or ""))
+            ml_path = Path(str(row.get("ml_json") or ""))
+            if sp_path.is_file():
+                try:
+                    sp = json.loads(sp_path.read_text(encoding="utf-8"))
+                    species = _clean_species(str(sp.get("prediction") or "Unknown"))
+                    conf = sp.get("score")
+                    if isinstance(conf, (float, int)):
+                        species_conf = f"{float(conf):.2f}"
+                except Exception:
+                    pass
+            if ml_path.is_file():
+                try:
+                    det = json.loads(ml_path.read_text(encoding="utf-8"))
+                    objs = det.get("objects") or []
+                    if objs and isinstance(objs, list):
+                        top = objs[0]
+                        if isinstance(top, dict):
+                            det_class = str(top.get("class") or "Unknown")
+                            c = top.get("confidence")
+                            if isinstance(c, (float, int)):
+                                det_conf = f"{float(c):.2f}"
+                except Exception:
+                    pass
+            desc = (
+                f"Likely {species}"
+                + (f" ({species_conf})" if species_conf else "")
+                + f" in {source}, frame {frame_name}. "
+                + f"Detector: {det_class}"
+                + (f" ({det_conf})" if det_conf else "")
+                + "."
+            )
+            try:
+                ann_rel = _safe_rel(ann)
+            except Exception:
+                continue
+            records.append(
+                {
+                    "job_id": str(j.get("id") or ""),
+                    "source": source,
+                    "frame": frame_name,
+                    "species": species,
+                    "description": desc,
+                    "annotated_rel": ann_rel,
+                }
+            )
+    return records
+
+
 def _render_page(msg: str = "") -> str:
     jobs = db.list_jobs(limit=200)
+    records = _frame_records(jobs)
     paused = db.is_paused()
     video_summary: dict[str, dict[str, int | str]] = {}
     job_items: list[str] = []
@@ -68,7 +151,7 @@ def _render_page(msg: str = "") -> str:
             try:
                 outputs = json.loads(j["outputs_json"])
                 if outputs:
-                    ann = Path(outputs[0]["annotated"]).relative_to(ROOT).as_posix()
+                    ann = _safe_rel(outputs[0]["annotated"])
                     preview = f"<img src='/files/{ann}' class='preview'/>"
             except Exception:
                 preview = ""
@@ -93,7 +176,7 @@ def _render_page(msg: str = "") -> str:
         if out_dir:
             try:
                 rel = Path(out_dir).relative_to(ROOT).as_posix()
-                out_link = f"<a class='link-btn' href='/files/{rel}'>Output Folder</a>"
+                out_link = f"<a class='link-btn' href='/browse-output/{j['id']}'>Output Browser</a>"
                 open_link = f"<a class='link-btn' href='/open-output/{j['id']}'>Open Folder</a>"
             except Exception:
                 out_link = ""
@@ -144,6 +227,19 @@ def _render_page(msg: str = "") -> str:
             f"<td>{proc}/{total} ({pct}%)</td>"
             f"</tr>"
         )
+    result_rows: list[str] = []
+    for r in records:
+        result_rows.append(
+            "<tr class='result-row' "
+            f"data-search='{html.escape((r['source'] + ' ' + r['frame'] + ' ' + r['species'] + ' ' + r['description']).lower(), quote=True)}'>"
+            f"<td><img src='/files/{r['annotated_rel']}' class='thumb'/></td>"
+            f"<td>#{r['job_id']}</td>"
+            f"<td>{html.escape(r['source'])}</td>"
+            f"<td>{html.escape(r['frame'])}</td>"
+            f"<td>{html.escape(r['species'])}</td>"
+            f"<td>{html.escape(r['description'])}</td>"
+            "</tr>"
+        )
     return f"""<!doctype html>
 <html><head><meta charset='utf-8'/>
 <meta name='viewport' content='width=device-width, initial-scale=1'/>
@@ -181,6 +277,7 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
 .tbl{{width:100%;border-collapse:collapse;font-size:13px}}
 .tbl th,.tbl td{{border:1px solid #e2e8f0;padding:8px;text-align:left}}
 .tbl th{{background:#f8fafc}}
+.thumb{{max-width:140px;border:1px solid #cbd5e1;border-radius:6px}}
 </style></head>
 <body><div class='wrap'>
 <div class='top'><div class='title'>Wildlife Processor</div><div class='badge'>{'Paused' if paused else 'Running'}</div></div>
@@ -249,9 +346,33 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
     </tbody>
   </table>
 </div>
+<div class='panel' style='margin-top:16px'>
+  <h3 style='margin-top:0'>Frame Results (Searchable)</h3>
+  <label>Search by species, video, frame, or description</label>
+  <input id='resultsSearch' placeholder='e.g. hedgehog, IMG_0406, frame_0003' oninput='filterResults()' />
+  <div style='height:10px'></div>
+  <table class='tbl'>
+    <thead>
+      <tr><th>Preview</th><th>Job</th><th>Video</th><th>Frame</th><th>Species</th><th>Description</th></tr>
+    </thead>
+    <tbody id='resultsBody'>
+      {''.join(result_rows) if result_rows else '<tr><td colspan="6">No processed frames yet</td></tr>'}
+    </tbody>
+  </table>
+</div>
 <h3>Runs</h3>
 <div class='jobs'>{''.join(job_items)}</div>
-<script>setTimeout(()=>location.reload(),3000)</script>
+<script>
+function filterResults(){{
+  const q = (document.getElementById('resultsSearch')?.value || '').toLowerCase().trim();
+  const rows = document.querySelectorAll('.result-row');
+  rows.forEach((row)=>{{
+    const text = row.getAttribute('data-search') || '';
+    row.style.display = (!q || text.includes(q)) ? '' : 'none';
+  }});
+}}
+setTimeout(()=>location.reload(),3000)
+</script>
 </div></body></html>"""
 
 
@@ -421,6 +542,84 @@ async def open_output(job_id: int) -> RedirectResponse:
             elif os.name == "posix":
                 subprocess.Popen(["xdg-open", str(p)])
     return RedirectResponse(url="/", status_code=303)
+
+
+@app.get("/browse-output/{job_id}", response_class=HTMLResponse)
+async def browse_output(job_id: int) -> HTMLResponse:
+    j = db.get_job(job_id)
+    if not j or not j.get("output_dir"):
+        return HTMLResponse("<p>Output folder not available. <a href='/'>Back</a></p>")
+    p = Path(j["output_dir"])
+    if not p.is_dir():
+        return HTMLResponse("<p>Output folder does not exist on disk. <a href='/'>Back</a></p>")
+    try:
+        rel_dir = p.relative_to(ROOT).as_posix()
+    except Exception:
+        return HTMLResponse("<p>Output folder is outside app root. <a href='/'>Back</a></p>")
+
+    rows: list[str] = []
+    ann_files = sorted(
+        [f for f in p.iterdir() if f.is_file() and f.name.lower().endswith(".annotated.jpg")],
+        key=lambda x: x.name.lower(),
+    )
+    for ann in ann_files:
+        base = re.sub(r"\.annotated\.jpg$", "", ann.name, flags=re.IGNORECASE)
+        species = "Unknown"
+        species_conf = ""
+        det_class = "Unknown"
+        det_conf = ""
+        sp_path = p / f"{base}.species.json"
+        ml_path = p / f"{base}.ml.json"
+        if sp_path.is_file():
+            try:
+                sp = json.loads(sp_path.read_text(encoding="utf-8"))
+                species = _clean_species(str(sp.get("prediction") or "Unknown"))
+                conf = sp.get("score")
+                if isinstance(conf, (float, int)):
+                    species_conf = f"{float(conf):.2f}"
+            except Exception:
+                pass
+        if ml_path.is_file():
+            try:
+                det = json.loads(ml_path.read_text(encoding="utf-8"))
+                objs = det.get("objects") or []
+                if objs and isinstance(objs, list):
+                    top = objs[0]
+                    if isinstance(top, dict):
+                        det_class = str(top.get("class") or "Unknown")
+                        c = top.get("confidence")
+                        if isinstance(c, (float, int)):
+                            det_conf = f"{float(c):.2f}"
+            except Exception:
+                pass
+        rel = ann.relative_to(ROOT).as_posix()
+        desc = (
+            f"Likely {species}"
+            + (f" ({species_conf})" if species_conf else "")
+            + f" in frame {base}. Detector: {det_class}"
+            + (f" ({det_conf})" if det_conf else "")
+            + "."
+        )
+        rows.append(
+            "<div style='margin-bottom:20px;padding:12px;border:1px solid #e2e8f0;border-radius:8px'>"
+            f"<div><b>Frame:</b> {html.escape(base)}</div>"
+            f"<div><b>Species:</b> {html.escape(species)}</div>"
+            f"<div style='margin:6px 0 10px 0;color:#334155'>{html.escape(desc)}</div>"
+            f"<a href='/files/{rel}' target='_blank'>{html.escape(ann.name)}</a><br/>"
+            f"<img src='/files/{rel}' style='max-width:860px;border:1px solid #ddd;border-radius:6px'/>"
+            "</div>"
+        )
+    if not rows:
+        rows.append("<p>No annotated frames found in this output folder.</p>")
+    html = (
+        "<!doctype html><html><body style='font-family:Arial,sans-serif;max-width:980px;margin:20px auto'>"
+        f"<h3>Output Browser - Job #{job_id}</h3>"
+        f"<p>Folder: <code>{rel_dir}</code></p>"
+        "<p><a href='/'>Back</a></p>"
+        + "".join(rows)
+        + "</body></html>"
+    )
+    return HTMLResponse(html)
 
 
 @app.get("/cleanup-output")
