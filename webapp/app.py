@@ -306,6 +306,8 @@ def _render_page(msg: str = "", page: int = 1) -> str:
     pagination_bits.append(f"<span class='job-meta'>Page {page} / {total_pages} ({total_records} total)</span>")
     if page < total_pages:
         pagination_bits.append(f"<a class='link-btn' href='/?page={page + 1}'>Next</a>")
+    has_active = counts.get("queued", 0) > 0 or counts.get("running", 0) > 0
+    records_json = json.dumps(records).replace("</", "<\\/")
     return f"""<!doctype html>
 <html><head><meta charset='utf-8'/>
 <meta name='viewport' content='width=device-width, initial-scale=1'/>
@@ -349,6 +351,22 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
 .result-card{{display:grid;grid-template-columns:240px 1fr;gap:12px;align-items:start;padding:10px;border:1px solid #e2e8f0;border-radius:10px;background:#fff}}
 .result-text{{display:grid;gap:5px;font-size:13px}}
 .desc-col{{max-width:100%;color:#334155}}
+.browser-row{{display:grid;grid-template-columns:280px 1fr 1fr;gap:12px}}
+.video-list{{max-height:340px;overflow:auto;border:1px solid #e2e8f0;border-radius:8px;padding:8px;background:#fff}}
+.frame-list{{max-height:340px;overflow:auto;border:1px solid #e2e8f0;border-radius:8px;padding:8px;background:#fff}}
+.video-item,.frame-item{{display:block;width:100%;text-align:left;padding:7px 8px;border:1px solid #dbe3ef;border-radius:6px;background:#f8fafc;color:#0f172a;cursor:pointer;margin-bottom:6px}}
+.video-item.active,.frame-item.active{{background:#dbeafe;border-color:#93c5fd}}
+.inline-preview{{border:1px solid #e2e8f0;border-radius:8px;padding:8px;background:#fff;display:grid;gap:8px}}
+.inline-preview img{{max-width:100%;border:1px solid #cbd5e1;border-radius:6px}}
+.tabs{{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}}
+.tab-btn{{padding:8px 10px;border-radius:8px;border:1px solid #c7d2fe;background:#eef2ff;color:#3730a3;cursor:pointer}}
+.tab-btn.active{{background:#3730a3;color:#fff;border-color:#3730a3}}
+.viewer-overlay{{position:fixed;inset:0;background:rgba(2,6,23,.72);display:none;align-items:center;justify-content:center;z-index:9999}}
+.viewer-box{{width:min(96vw,1200px);height:min(92vh,900px);background:#0b1220;border-radius:10px;padding:10px;display:grid;grid-template-rows:auto auto 1fr;gap:8px}}
+.viewer-top{{display:flex;justify-content:space-between;align-items:center;color:#e2e8f0}}
+.viewer-controls{{display:flex;gap:8px;align-items:center;color:#e2e8f0}}
+.viewer-canvas{{overflow:auto;background:#020617;border:1px solid #1e293b;border-radius:8px;display:flex;align-items:flex-start;justify-content:flex-start}}
+.viewer-img{{transform-origin:top left;max-width:none;max-height:none}}
 </style></head>
 <body><div class='wrap'>
 <div class='top'><div class='title'>Wildlife Processor</div><div class='badge'>{'Paused' if paused else 'Running'}</div></div>
@@ -359,9 +377,9 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
     <div class='actions'>
       <a class='btn btn-subtle js-action' href='/pause'>Pause</a>
       <a class='btn btn-subtle js-action' href='/resume'>Resume</a>
-      <a class='btn btn-subtle js-action' href='/cancel-all'>Cancel All</a>
-      <a class='btn btn-subtle js-action' href='/clear-jobs'>Clear Jobs</a>
-      <a class='btn btn-subtle js-action' href='/reset-all'>Reset All</a>
+      <a class='btn btn-subtle js-action' href='/cancel-all' data-confirm='Cancel all queued and running jobs?'>Cancel All</a>
+      <a class='btn btn-subtle js-action' href='/clear-jobs' data-confirm='Clear all job records from the database? This cannot be undone.'>Clear Jobs</a>
+      <a class='btn btn-subtle js-action' href='/reset-all' data-confirm='Reset everything? This will cancel active jobs, clear job history, and delete generated/local queued files.'>Reset All</a>
       <a class='btn btn-subtle' href='/' >Refresh</a>
     </div>
     <div class='counts'>
@@ -415,7 +433,7 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
     <input name='species_url' value='http://127.0.0.1:8100' />
     <div style='height:10px'></div>
     <button class='btn' type='submit'>Enqueue Folder</button>
-    <a class='btn btn-subtle js-action' href='/cleanup-output'>Cleanup Output Folder</a>
+    <a class='btn btn-subtle js-action' href='/cleanup-output' data-confirm='Delete all run_* output folders under test-media/output? Active job output folders are skipped.'>Cleanup Output Folder</a>
   </form>
 </div>
 <div class='panel' style='margin-top:16px'>
@@ -430,24 +448,78 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
   </table>
 </div>
 <div class='panel' style='margin-top:16px'>
-  <h3 style='margin-top:0'>Frame Results (Searchable)</h3>
-  <label>Search by species, video, frame, or description</label>
-  <input id='resultsSearch' placeholder='e.g. hedgehog, IMG_0406, frame_0003' oninput='filterResults()' />
-  <div style='height:8px'></div>
-  <div class='actions'>{''.join(pagination_bits)}</div>
-  <div style='height:10px'></div>
-  <div id='resultsBody' class='results-list'>
-    {''.join(result_rows) if result_rows else '<div class="job-meta">No processed frames yet</div>'}
+  <h3 style='margin-top:0'>Video Frame Browser</h3>
+  <div class='browser-row'>
+    <div>
+      <label>Videos</label>
+      <div id='videoList' class='video-list'></div>
+    </div>
+    <div>
+      <label>Frames (selected video)</label>
+      <div id='frameList' class='frame-list'></div>
+    </div>
+    <div>
+      <label>Inline Preview</label>
+      <div id='inlinePreview' class='inline-preview'>
+        <div class='job-meta'>Select a frame to preview</div>
+      </div>
+    </div>
   </div>
 </div>
-<h3>Runs</h3>
-<div class='jobs'>{''.join(job_items)}</div>
+<div class='tabs'>
+  <button id='tabResultsBtn' class='tab-btn active' type='button' onclick='showTab("results")'>Frame Results</button>
+  <button id='tabRunsBtn' class='tab-btn' type='button' onclick='showTab("runs")'>Runs</button>
+</div>
+<div id='tabResults' style='display:block'>
+  <div class='panel' style='margin-top:10px'>
+    <h3 style='margin-top:0'>Frame Results (Searchable)</h3>
+    <label>Search by species, video, frame, or description</label>
+    <input id='resultsSearch' placeholder='e.g. hedgehog, IMG_0406, frame_0003' oninput='filterResults()' />
+    <div style='height:8px'></div>
+    <div class='actions'>{''.join(pagination_bits)}</div>
+    <div style='height:10px'></div>
+    <div id='resultsBody' class='results-list'>
+      {''.join(result_rows) if result_rows else '<div class="job-meta">No processed frames yet</div>'}
+    </div>
+  </div>
+</div>
+<div id='tabRuns' style='display:none'>
+  <h3>Runs</h3>
+  <div class='jobs'>{''.join(job_items)}</div>
+</div>
+<div id='viewerOverlay' class='viewer-overlay'>
+  <div class='viewer-box'>
+    <div class='viewer-top'>
+      <div id='viewerTitle'>Image Viewer</div>
+      <button class='btn btn-subtle' type='button' onclick='closeViewer()'>Close</button>
+    </div>
+    <div class='viewer-controls'>
+      <span>Zoom</span>
+      <input id='zoomRange' type='range' min='20' max='400' value='100' oninput='setViewerZoom(this.value)' />
+      <span id='zoomLabel'>100%</span>
+      <button class='btn btn-subtle' type='button' onclick='setViewerZoom(100)'>Reset</button>
+    </div>
+    <div class='viewer-canvas'>
+      <img id='viewerImage' class='viewer-img' src='' alt='preview' />
+    </div>
+  </div>
+</div>
 <script>
 const SCROLL_KEY = 'wildlife_ui_scroll_y';
+const HAS_ACTIVE = {"true" if has_active else "false"};
+const FRAME_RECORDS = {records_json};
+let CURRENT_ZOOM = 100;
+let ACTIVE_VIDEO = '';
+let ACTIVE_FRAME = '';
 window.addEventListener('beforeunload', () => {{
   sessionStorage.setItem(SCROLL_KEY, String(window.scrollY || 0));
 }});
 window.addEventListener('load', () => {{
+  const u = new URL(window.location.href);
+  if (u.searchParams.has('msg')) {{
+    u.searchParams.delete('msg');
+    window.history.replaceState(null, '', u.pathname + (u.search ? u.search : ''));
+  }}
   const y = Number(sessionStorage.getItem(SCROLL_KEY) || '0');
   if (Number.isFinite(y) && y > 0) {{
     window.scrollTo({{ top: y, behavior: 'auto' }});
@@ -458,6 +530,10 @@ document.querySelectorAll('a.js-action').forEach((el) => {{
     evt.preventDefault();
     const href = el.getAttribute('href');
     if (!href) return;
+    const confirmMsg = el.getAttribute('data-confirm');
+    if (confirmMsg && !window.confirm(confirmMsg)) {{
+      return;
+    }}
     sessionStorage.setItem(SCROLL_KEY, String(window.scrollY || 0));
     try {{
       await fetch(href, {{ method: 'GET', credentials: 'same-origin' }});
@@ -469,6 +545,115 @@ document.querySelectorAll('a.js-action').forEach((el) => {{
     window.location.reload();
   }});
 }});
+function openViewer(src, title) {{
+  const ov = document.getElementById('viewerOverlay');
+  const img = document.getElementById('viewerImage');
+  const ttl = document.getElementById('viewerTitle');
+  if (!ov || !img || !ttl) return;
+  img.src = src;
+  ttl.textContent = title || 'Image Viewer';
+  setViewerZoom(100);
+  ov.style.display = 'flex';
+}}
+function closeViewer() {{
+  const ov = document.getElementById('viewerOverlay');
+  if (ov) ov.style.display = 'none';
+}}
+function setViewerZoom(v) {{
+  const z = Math.max(20, Math.min(400, Number(v) || 100));
+  CURRENT_ZOOM = z;
+  const img = document.getElementById('viewerImage');
+  const lbl = document.getElementById('zoomLabel');
+  const rng = document.getElementById('zoomRange');
+  if (img) img.style.transform = `scale(${{z / 100}})`;
+  if (lbl) lbl.textContent = `${{z}}%`;
+  if (rng && String(rng.value) !== String(z)) rng.value = String(z);
+}}
+function showTab(name) {{
+  const isResults = name === 'results';
+  document.getElementById('tabResults').style.display = isResults ? 'block' : 'none';
+  document.getElementById('tabRuns').style.display = isResults ? 'none' : 'block';
+  document.getElementById('tabResultsBtn').classList.toggle('active', isResults);
+  document.getElementById('tabRunsBtn').classList.toggle('active', !isResults);
+}}
+function attachImageClickHandlers() {{
+  document.querySelectorAll('#resultsBody img.thumb').forEach((img) => {{
+    const src = img.getAttribute('src') || '';
+    const card = img.closest('.result-card');
+    const title = card ? (card.querySelector('.result-text')?.textContent || 'Frame') : 'Frame';
+    img.style.cursor = 'zoom-in';
+    img.addEventListener('click', (e) => {{
+      e.preventDefault();
+      openViewer(src, title);
+    }});
+    const a = img.closest('a');
+    if (a) a.addEventListener('click', (e) => e.preventDefault());
+  }});
+}}
+function renderInlinePreview(r) {{
+  const box = document.getElementById('inlinePreview');
+  if (!box) return;
+  if (!r) {{
+    box.innerHTML = "<div class='job-meta'>Select a frame to preview</div>";
+    return;
+  }}
+  const src = `/files/${{r.annotated_rel}}`;
+  box.innerHTML = `
+    <div><b>${{r.source}}</b></div>
+    <div class='job-meta'>${{r.frame}} | ${{r.species}}</div>
+    <img src="${{src}}" alt="frame preview" loading="lazy" />
+    <div class='job-meta'>${{r.description || ''}}</div>
+    <div><button class='btn btn-subtle' type='button' onclick="openViewer('${{src}}','${{(r.source + ' :: ' + r.frame).replace(/'/g, "\\'")}}')">Open Zoom Viewer</button></div>
+  `;
+}}
+function renderVideoBrowser() {{
+  const videoMap = new Map();
+  for (const r of FRAME_RECORDS) {{
+    const k = r.source || 'unknown';
+    if (!videoMap.has(k)) videoMap.set(k, []);
+    videoMap.get(k).push(r);
+  }}
+  const videoNames = Array.from(videoMap.keys()).sort((a, b) => a.localeCompare(b));
+  const vList = document.getElementById('videoList');
+  const fList = document.getElementById('frameList');
+  if (!vList || !fList) return;
+  if (videoNames.length === 0) {{
+    vList.innerHTML = "<div class='job-meta'>No videos yet</div>";
+    fList.innerHTML = "<div class='job-meta'>No frames yet</div>";
+    return;
+  }}
+  if (!ACTIVE_VIDEO || !videoMap.has(ACTIVE_VIDEO)) ACTIVE_VIDEO = videoNames[0];
+  vList.innerHTML = videoNames.map((name) => {{
+    const active = name === ACTIVE_VIDEO ? ' active' : '';
+    const cnt = videoMap.get(name).length;
+    return `<button class='video-item${{active}}' type='button' data-video='${{name}}'>${{name}} (${{cnt}})</button>`;
+  }}).join('');
+  vList.querySelectorAll('.video-item').forEach((btn) => {{
+    btn.addEventListener('click', () => {{
+      ACTIVE_VIDEO = btn.getAttribute('data-video') || '';
+      ACTIVE_FRAME = '';
+      renderVideoBrowser();
+    }});
+  }});
+  const frames = (videoMap.get(ACTIVE_VIDEO) || []).slice().sort((a, b) => String(a.frame).localeCompare(String(b.frame)));
+  if (!ACTIVE_FRAME && frames.length > 0) ACTIVE_FRAME = String(frames[0].annotated_rel);
+  fList.innerHTML = frames.map((r) => {{
+    const src = `/files/${{r.annotated_rel}}`;
+    const active = String(r.annotated_rel) === ACTIVE_FRAME ? ' active' : '';
+    const text = `${{r.frame}} | ${{r.species}}`;
+    return `<button class='frame-item${{active}}' type='button' data-src='${{src}}' data-id='${{r.annotated_rel}}' data-title='${{r.source}} :: ${{r.frame}}'>${{text}}</button>`;
+  }}).join('');
+  fList.querySelectorAll('.frame-item').forEach((btn) => {{
+    btn.addEventListener('click', () => {{
+      ACTIVE_FRAME = btn.getAttribute('data-id') || '';
+      const picked = frames.find((x) => String(x.annotated_rel) === ACTIVE_FRAME);
+      renderInlinePreview(picked || null);
+      renderVideoBrowser();
+    }});
+  }});
+  const first = frames.find((x) => String(x.annotated_rel) === ACTIVE_FRAME) || frames[0];
+  renderInlinePreview(first || null);
+}}
 async function queueSelectedFiles() {{
   const picker = document.getElementById('multiFiles');
   const files = (window._droppedFiles && window._droppedFiles.length) ? window._droppedFiles : (picker?.files || []);
@@ -508,6 +693,9 @@ if (dz) {{
     dz.textContent = files.length ? `${{files.length}} file(s) ready` : 'Drag & drop files here';
   }});
 }}
+document.getElementById('viewerOverlay')?.addEventListener('click', (e) => {{
+  if (e.target && e.target.id === 'viewerOverlay') closeViewer();
+}});
 function filterResults(){{
   const q = (document.getElementById('resultsSearch')?.value || '').toLowerCase().trim();
   const rows = document.querySelectorAll('.result-row');
@@ -516,7 +704,17 @@ function filterResults(){{
     row.style.display = (!q || text.includes(q)) ? '' : 'none';
   }});
 }}
-setTimeout(()=>location.reload(),3000)
+attachImageClickHandlers();
+renderVideoBrowser();
+setTimeout(() => {{
+  const picker = document.getElementById('multiFiles');
+  const hasPickerFiles = !!(picker && picker.files && picker.files.length > 0);
+  const hasDropped = !!(window._droppedFiles && window._droppedFiles.length > 0);
+  const isTyping = document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA');
+  if (HAS_ACTIVE && !hasPickerFiles && !hasDropped && !isTyping) {{
+    window.location.reload();
+  }}
+}}, 3000)
 </script>
 </div></body></html>"""
 
@@ -608,6 +806,7 @@ async def process_multi(
     ml_url: str = Form("http://127.0.0.1:8010"),
     species_url: str = Form("http://127.0.0.1:8100"),
 ) -> RedirectResponse:
+    logger.info("process_multi received files=%s", len(media_files))
     queued = 0
     skipped = 0
     bad = 0
@@ -662,13 +861,20 @@ async def enqueue_folder(
     ml_url: str = Form("http://127.0.0.1:8010"),
     species_url: str = Form("http://127.0.0.1:8100"),
 ) -> HTMLResponse:
-    p = Path(folder_path)
+    raw_folder = (folder_path or "").strip().strip('"').strip("'")
+    p = Path(raw_folder)
     if not p.is_dir():
-        return RedirectResponse(url=f"/?msg={quote_plus(f'Folder not found: {folder_path}')}", status_code=303)
+        return RedirectResponse(url=f"/?msg={quote_plus(f'Folder not found: {raw_folder}')}", status_code=303)
     wanted = {x.strip().lower() for x in exts.split(",") if x.strip()}
-    files = [f for f in sorted(p.rglob("*")) if f.is_file() and f.suffix.lower() in wanted]
+    try:
+        files = [f for f in sorted(p.rglob("*")) if f.is_file() and f.suffix.lower() in wanted]
+    except Exception as e:
+        return RedirectResponse(
+            url=f"/?msg={quote_plus(f'Cannot access folder: {raw_folder} ({e})')}",
+            status_code=303,
+        )
     if not files:
-        return RedirectResponse(url=f"/?msg={quote_plus(f'No matching files in {folder_path}')}", status_code=303)
+        return RedirectResponse(url=f"/?msg={quote_plus(f'No matching files in {raw_folder}')}", status_code=303)
     q = 0
     skipped = 0
     for f in files:
@@ -691,9 +897,9 @@ async def enqueue_folder(
             skipped += 1
         else:
             q += 1
-    logger.info("batch_enqueued count=%s skipped=%s folder=%s", q, skipped, folder_path)
+    logger.info("batch_enqueued count=%s skipped=%s folder=%s", q, skipped, raw_folder)
     return RedirectResponse(
-        url=f"/?msg={quote_plus(f'Batch queued {q} file(s), skipped {skipped} existing file(s) from {folder_path}.')}",
+        url=f"/?msg={quote_plus(f'Batch queued {q} file(s), skipped {skipped} existing file(s) from {raw_folder}.')}",
         status_code=303,
     )
 

@@ -16,6 +16,22 @@ SUPPORTED_IMAGES = {".jpg", ".jpeg", ".png", ".webp"}
 SUPPORTED_VIDEOS = {".mp4", ".mov", ".avi", ".mkv"}
 
 
+def _compact_species_label(value: str | None, max_len: int = 36) -> str:
+    if not value:
+        return ""
+    raw = value.replace("_", " ").strip()
+    # Species services may return taxonomy chains like:
+    # "id;class;order;family;genus;species;Common Name"
+    if ";" in raw:
+        parts = [p.strip() for p in raw.split(";") if p.strip()]
+        if parts:
+            raw = parts[-1]
+    cleaned = " ".join(raw.split())
+    if len(cleaned) > max_len:
+        cleaned = cleaned[: max_len - 1].rstrip() + "…"
+    return cleaned
+
+
 def extract_frames(video_path: Path, frames_dir: Path, fps: float = 1.0) -> list[Path]:
     frames_dir.mkdir(parents=True, exist_ok=True)
     stem = video_path.stem
@@ -87,14 +103,12 @@ def draw_boxes(
     im = Image.open(image_path).convert("RGB")
     d = ImageDraw.Draw(im)
     w, h = im.size
-    font_size = max(14, min(26, int(h * 0.028)))
+    font_size = max(13, min(20, int(h * 0.022)))
     try:
         font = ImageFont.truetype("arial.ttf", font_size)
     except Exception:
         font = ImageFont.load_default()
-    clean_species = None
-    if species_label and isinstance(species_label, str):
-        clean_species = species_label.replace("_", " ").strip().title()
+    clean_species = _compact_species_label(species_label if isinstance(species_label, str) else None)
     for obj in det.get("objects") or []:
         bbox = obj.get("bbox")
         if not isinstance(bbox, list) or len(bbox) != 4:
