@@ -83,6 +83,10 @@ You can run a local Python web app that does:
 - detector + species calls
 - annotated images with bounding boxes
 - JSON results saved to `test-media/output/run_<timestamp>/`
+- queue + run history in SQLite (`data/webapp_jobs.sqlite`)
+- pause/resume processing (n8n-like run control)
+- retry/cancel controls from the UI
+- inline preview of generated annotated frames/images
 
 Start services first (include species):
 
@@ -99,6 +103,7 @@ Run web app:
 Open:
 
 - `http://localhost:8110`
+- The app binds to `127.0.0.1` (localhost only) by default.
 
 To include species outputs, start stack with species profile first:
 
