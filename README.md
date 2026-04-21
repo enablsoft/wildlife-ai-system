@@ -48,6 +48,27 @@ docker compose --env-file .env down
   - `docker compose --env-file .env --profile species up -d`
 - Configure image/tag via `SPECIES_SERVICE_IMAGE` in `.env`.
 
+## Test folder workflow (input/output)
+
+Use the built-in test workspace:
+
+- Put test images in `test/input/` (`.jpg`, `.jpeg`, `.png`, `.webp`).
+- Run:
+
+```powershell
+.\scripts\test-local.ps1
+```
+
+- Inspect results in `test/output/`:
+  - `<name>.ml.json` (MegaDetector response)
+  - `<name>.species.json` (SpeciesNet response)
+
+To include species outputs, start stack with species profile first:
+
+```powershell
+docker compose --env-file .env --profile species up -d
+```
+
 `config/stack.example.json` shows container-side defaults for:
 
 - `optional_batch.job_db_path_in_container`
