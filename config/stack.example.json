@@ -1,0 +1,12 @@
+{
+  "_description": "Copy to stack.json for overrides.",
+  "version": 1,
+  "priority": "webhook",
+  "optional_batch": {
+    "enabled": false,
+    "job_db_path_in_container": "/data/jobs.sqlite",
+    "media_root_in_container": "/data/media",
+    "batch_ui_public_url": "http://localhost:8090",
+    "ml_service_url": "http://localhost:8010"
+  }
+}
