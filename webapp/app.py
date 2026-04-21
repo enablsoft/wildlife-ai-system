@@ -45,6 +45,51 @@ def _safe_rel(path_str: str) -> str:
     return Path(path_str).relative_to(ROOT).as_posix()
 
 
+def _norm_path(p: Path) -> str:
+    try:
+        return str(p.resolve()).lower()
+    except Exception:
+        return str(p).lower()
+
+
+def _enqueue_uploaded_file(
+    media: UploadFile,
+    fps: float,
+    ml_url: str,
+    species_url: str,
+) -> tuple[int, str]:
+    if not media.filename:
+        return (0, "Missing filename")
+    suffix = Path(media.filename).suffix.lower()
+    if suffix not in SUPPORTED_IMAGES and suffix not in SUPPORTED_VIDEOS:
+        return (0, f"Unsupported type: {suffix}")
+    media_type = "video" if suffix in SUPPORTED_VIDEOS else "image"
+    IN_DIR.mkdir(parents=True, exist_ok=True)
+    VID_DIR.mkdir(parents=True, exist_ok=True)
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    saved = (VID_DIR if media_type == "video" else IN_DIR) / Path(media.filename).name
+    with saved.open("wb") as f:
+        shutil.copyfileobj(media.file, f)
+    jid = db.add_job(
+        filename=Path(media.filename).name,
+        media_type=media_type,
+        input_path=_norm_path(saved),
+        fps=max(0.1, float(fps)),
+        ml_url=ml_url,
+        species_url=species_url,
+    )
+    if jid < 0:
+        return (jid, f"Already exists as job #{abs(jid)} for file: {Path(media.filename).name}")
+    logger.info(
+        "job_queued file=%s media_type=%s ml_url=%s species_url=%s",
+        media.filename,
+        media_type,
+        ml_url,
+        species_url,
+    )
+    return (jid, "")
+
+
 def _clean_species(value: str | None) -> str:
     if not value:
         return "Unknown"
@@ -121,9 +166,16 @@ def _frame_records(jobs: list[dict[str, object]]) -> list[dict[str, str]]:
     return records
 
 
-def _render_page(msg: str = "") -> str:
+def _render_page(msg: str = "", page: int = 1) -> str:
     jobs = db.list_jobs(limit=200)
     records = _frame_records(jobs)
+    page_size = 5
+    total_records = len(records)
+    total_pages = max(1, (total_records + page_size - 1) // page_size)
+    page = max(1, min(page, total_pages))
+    start = (page - 1) * page_size
+    end = start + page_size
+    page_records = records[start:end]
     paused = db.is_paused()
     video_summary: dict[str, dict[str, int | str]] = {}
     job_items: list[str] = []
@@ -153,7 +205,10 @@ def _render_page(msg: str = "") -> str:
                 outputs = json.loads(j["outputs_json"])
                 if outputs:
                     ann = _safe_rel(outputs[0]["annotated"])
-                    preview = f"<img src='/files/{ann}' class='preview'/>"
+                    preview = (
+                        f"<img src='/files/{ann}' class='preview' "
+                        "onerror=\"this.onerror=null;this.replaceWith(document.createTextNode('Preview not available (file removed)'))\"/>"
+                    )
             except Exception:
                 preview = ""
         logs = (j.get("logs") or "").strip().splitlines()
@@ -161,9 +216,9 @@ def _render_page(msg: str = "") -> str:
         err = j.get("error_text") or ""
         actions = ""
         if j["status"] in ("error", "cancelled"):
-            actions += f"<a class='link-btn' href='/retry/{j['id']}'>Retry</a> "
+            actions += f"<a class='link-btn js-action' href='/retry/{j['id']}'>Retry</a> "
         if j["status"] == "queued":
-            actions += f"<a class='link-btn' href='/cancel/{j['id']}'>Cancel</a>"
+            actions += f"<a class='link-btn js-action' href='/cancel/{j['id']}'>Cancel</a>"
         status_class = {
             "queued": "st-queued",
             "running": "st-running",
@@ -229,18 +284,28 @@ def _render_page(msg: str = "") -> str:
             f"</tr>"
         )
     result_rows: list[str] = []
-    for r in records:
+    for r in page_records:
         result_rows.append(
-            "<tr class='result-row' "
+            "<div class='result-card result-row' "
             f"data-search='{html.escape((r['source'] + ' ' + r['frame'] + ' ' + r['species'] + ' ' + r['description']).lower(), quote=True)}'>"
-            f"<td><img src='/files/{r['annotated_rel']}' class='thumb'/></td>"
-            f"<td>#{r['job_id']}</td>"
-            f"<td>{html.escape(r['source'])}</td>"
-            f"<td>{html.escape(r['frame'])}</td>"
-            f"<td>{html.escape(r['species'])}</td>"
-            f"<td>{html.escape(r['description'])}</td>"
-            "</tr>"
+            f"<div><a href='/files/{r['annotated_rel']}' target='_blank'>"
+            f"<img src='/files/{r['annotated_rel']}' class='thumb' "
+            "onerror=\"this.onerror=null;this.replaceWith(document.createTextNode('Image removed'))\"/></a></div>"
+            "<div class='result-text'>"
+            f"<div><b>Job:</b> #{r['job_id']}</div>"
+            f"<div><b>Video:</b> {html.escape(r['source'])}</div>"
+            f"<div><b>Frame:</b> {html.escape(r['frame'])}</div>"
+            f"<div><b>Species:</b> {html.escape(r['species'])}</div>"
+            f"<div class='desc-col' title='{html.escape(r['description'], quote=True)}'>{html.escape(r['description'])}</div>"
+            "</div>"
+            "</div>"
         )
+    pagination_bits: list[str] = []
+    if page > 1:
+        pagination_bits.append(f"<a class='link-btn' href='/?page={page - 1}'>Prev</a>")
+    pagination_bits.append(f"<span class='job-meta'>Page {page} / {total_pages} ({total_records} total)</span>")
+    if page < total_pages:
+        pagination_bits.append(f"<a class='link-btn' href='/?page={page + 1}'>Next</a>")
     return f"""<!doctype html>
 <html><head><meta charset='utf-8'/>
 <meta name='viewport' content='width=device-width, initial-scale=1'/>
@@ -260,7 +325,8 @@ label{{font-size:13px;font-weight:600;color:#334155}}
 input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-sizing:border-box}}
 .btn{{display:inline-block;padding:9px 12px;border-radius:8px;background:#0f172a;color:white;text-decoration:none;border:0;cursor:pointer}}
 .btn-subtle{{background:#334155}}
-.actions a{{margin-right:8px}}
+.actions{{display:flex;flex-wrap:wrap;gap:8px;align-items:center}}
+.actions a{{margin-right:0}}
 .msg{{margin:8px 0;color:#0f766e}}
 .jobs{{margin-top:14px;display:grid;grid-template-columns:1fr;gap:12px}}
 .job-card{{background:white;border:1px solid #e5e7eb;border-radius:12px;padding:12px}}
@@ -278,7 +344,11 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
 .tbl{{width:100%;border-collapse:collapse;font-size:13px}}
 .tbl th,.tbl td{{border:1px solid #e2e8f0;padding:8px;text-align:left}}
 .tbl th{{background:#f8fafc}}
-.thumb{{max-width:140px;border:1px solid #cbd5e1;border-radius:6px}}
+.thumb{{max-width:220px;border:1px solid #cbd5e1;border-radius:6px}}
+.results-list{{display:grid;gap:10px}}
+.result-card{{display:grid;grid-template-columns:240px 1fr;gap:12px;align-items:start;padding:10px;border:1px solid #e2e8f0;border-radius:10px;background:#fff}}
+.result-text{{display:grid;gap:5px;font-size:13px}}
+.desc-col{{max-width:100%;color:#334155}}
 </style></head>
 <body><div class='wrap'>
 <div class='top'><div class='title'>Wildlife Processor</div><div class='badge'>{'Paused' if paused else 'Running'}</div></div>
@@ -287,8 +357,11 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
   <div class='panel'>
     <h3 style='margin-top:0'>Queue Control</h3>
     <div class='actions'>
-      <a class='btn btn-subtle' href='/pause'>Pause</a>
-      <a class='btn btn-subtle' href='/resume'>Resume</a>
+      <a class='btn btn-subtle js-action' href='/pause'>Pause</a>
+      <a class='btn btn-subtle js-action' href='/resume'>Resume</a>
+      <a class='btn btn-subtle js-action' href='/cancel-all'>Cancel All</a>
+      <a class='btn btn-subtle js-action' href='/clear-jobs'>Clear Jobs</a>
+      <a class='btn btn-subtle js-action' href='/reset-all'>Reset All</a>
       <a class='btn btn-subtle' href='/' >Refresh</a>
     </div>
     <div class='counts'>
@@ -312,6 +385,15 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
       <div style='height:10px'></div>
       <button class='btn' type='submit'>Queue Job</button>
     </form>
+    <div style='height:10px'></div>
+    <h4 style='margin:6px 0'>Quick Batch Upload (files/folder/drag-drop)</h4>
+    <input id='multiFiles' type='file' multiple webkitdirectory />
+    <div style='height:8px'></div>
+    <div id='dropZone' style='border:2px dashed #94a3b8;border-radius:10px;padding:12px;color:#334155'>
+      Drag & drop files here
+    </div>
+    <div style='height:8px'></div>
+    <button class='btn' type='button' onclick='queueSelectedFiles()'>Queue Selected Files</button>
   </div>
 </div>
 <div class='panel' style='margin-top:16px'>
@@ -333,7 +415,7 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
     <input name='species_url' value='http://127.0.0.1:8100' />
     <div style='height:10px'></div>
     <button class='btn' type='submit'>Enqueue Folder</button>
-    <a class='btn btn-subtle' href='/cleanup-output'>Cleanup Output Folder</a>
+    <a class='btn btn-subtle js-action' href='/cleanup-output'>Cleanup Output Folder</a>
   </form>
 </div>
 <div class='panel' style='margin-top:16px'>
@@ -351,19 +433,81 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
   <h3 style='margin-top:0'>Frame Results (Searchable)</h3>
   <label>Search by species, video, frame, or description</label>
   <input id='resultsSearch' placeholder='e.g. hedgehog, IMG_0406, frame_0003' oninput='filterResults()' />
+  <div style='height:8px'></div>
+  <div class='actions'>{''.join(pagination_bits)}</div>
   <div style='height:10px'></div>
-  <table class='tbl'>
-    <thead>
-      <tr><th>Preview</th><th>Job</th><th>Video</th><th>Frame</th><th>Species</th><th>Description</th></tr>
-    </thead>
-    <tbody id='resultsBody'>
-      {''.join(result_rows) if result_rows else '<tr><td colspan="6">No processed frames yet</td></tr>'}
-    </tbody>
-  </table>
+  <div id='resultsBody' class='results-list'>
+    {''.join(result_rows) if result_rows else '<div class="job-meta">No processed frames yet</div>'}
+  </div>
 </div>
 <h3>Runs</h3>
 <div class='jobs'>{''.join(job_items)}</div>
 <script>
+const SCROLL_KEY = 'wildlife_ui_scroll_y';
+window.addEventListener('beforeunload', () => {{
+  sessionStorage.setItem(SCROLL_KEY, String(window.scrollY || 0));
+}});
+window.addEventListener('load', () => {{
+  const y = Number(sessionStorage.getItem(SCROLL_KEY) || '0');
+  if (Number.isFinite(y) && y > 0) {{
+    window.scrollTo({{ top: y, behavior: 'auto' }});
+  }}
+}});
+document.querySelectorAll('a.js-action').forEach((el) => {{
+  el.addEventListener('click', async (evt) => {{
+    evt.preventDefault();
+    const href = el.getAttribute('href');
+    if (!href) return;
+    sessionStorage.setItem(SCROLL_KEY, String(window.scrollY || 0));
+    try {{
+      await fetch(href, {{ method: 'GET', credentials: 'same-origin' }});
+    }} catch (_) {{
+      // Fall back to regular navigation if request fails.
+      window.location.href = href;
+      return;
+    }}
+    window.location.reload();
+  }});
+}});
+async function queueSelectedFiles() {{
+  const picker = document.getElementById('multiFiles');
+  const files = (window._droppedFiles && window._droppedFiles.length) ? window._droppedFiles : (picker?.files || []);
+  if (!files || files.length === 0) {{
+    alert('Select files (or a folder) first.');
+    return;
+  }}
+  const ml = document.querySelector("input[name='ml_url']")?.value || 'http://127.0.0.1:8010';
+  const sp = document.querySelector("input[name='species_url']")?.value || 'http://127.0.0.1:8100';
+  const fps = document.querySelector("input[name='fps']")?.value || '1';
+  const fd = new FormData();
+  for (const f of files) fd.append('media_files', f);
+  fd.append('ml_url', ml);
+  fd.append('species_url', sp);
+  fd.append('fps', fps);
+  const res = await fetch('/process-multi', {{ method: 'POST', body: fd }});
+  if (res.redirected) {{
+    window.location.href = res.url;
+    return;
+  }}
+  window.location.reload();
+}}
+const dz = document.getElementById('dropZone');
+if (dz) {{
+  dz.addEventListener('dragover', (e) => {{
+    e.preventDefault();
+    dz.style.borderColor = '#3b82f6';
+  }});
+  dz.addEventListener('dragleave', () => {{
+    dz.style.borderColor = '#94a3b8';
+  }});
+  dz.addEventListener('drop', (e) => {{
+    e.preventDefault();
+    dz.style.borderColor = '#94a3b8';
+    const files = Array.from(e.dataTransfer?.files || []);
+    window._droppedFiles = files;
+    dz.textContent = files.length ? `${{files.length}} file(s) ready` : 'Drag & drop files here';
+  }});
+}}
 function filterResults(){{
   const q = (document.getElementById('resultsSearch')?.value || '').toLowerCase().trim();
   const rows = document.querySelectorAll('.result-row');
@@ -411,13 +555,22 @@ def _worker_loop() -> None:
                 ml_url=job.get("ml_url") or "http://127.0.0.1:8010",
                 species_url=job.get("species_url") or "http://127.0.0.1:8100",
                 progress_cb=lambda n, t, p: db.set_processed_items(jid, n),
+                should_continue_cb=lambda: not db.is_cancelled(jid),
             )
+            if db.is_cancelled(jid):
+                db.append_log(jid, "Cancelled by user")
+                logger.info("job_id=%s status=cancelled", jid)
+                continue
             db.append_log(jid, f"Done: {len(rows)} outputs")
             db.mark_done(jid, str(out_dir), rows)
             logger.info("job_id=%s status=done outputs=%s out_dir=%s", jid, len(rows), out_dir)
         except Exception as e:
-            db.mark_error(jid, str(e))
-            logger.exception("job_id=%s status=error msg=%s", jid, e)
+            if db.is_cancelled(jid):
+                db.append_log(jid, "Cancelled by user")
+                logger.info("job_id=%s status=cancelled", jid)
+            else:
+                db.mark_error(jid, str(e))
+                logger.exception("job_id=%s status=error msg=%s", jid, e)
 
 
 @app.on_event("startup")
@@ -426,8 +579,8 @@ async def startup_event() -> None:
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index(msg: str = "") -> str:
-    return _render_page(msg)
+async def index(msg: str = "", page: int = 1) -> str:
+    return _render_page(msg, page=page)
 
 
 @app.post("/process", response_class=HTMLResponse)
@@ -437,34 +590,40 @@ async def process(
     ml_url: str = Form("http://127.0.0.1:8010"),
     species_url: str = Form("http://127.0.0.1:8100"),
 ) -> HTMLResponse:
-    IN_DIR.mkdir(parents=True, exist_ok=True)
-    VID_DIR.mkdir(parents=True, exist_ok=True)
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    if not media.filename:
-        return RedirectResponse(url=f"/?msg={quote_plus('Missing filename')}", status_code=303)
-    suffix = Path(media.filename).suffix.lower()
-    if suffix not in SUPPORTED_IMAGES and suffix not in SUPPORTED_VIDEOS:
-        return RedirectResponse(url=f"/?msg={quote_plus(f'Unsupported type: {suffix}')}", status_code=303)
-    media_type = "video" if suffix in SUPPORTED_VIDEOS else "image"
-    saved = (VID_DIR if media_type == "video" else IN_DIR) / media.filename
-    with saved.open("wb") as f:
-        shutil.copyfileobj(media.file, f)
-    db.add_job(
-        filename=media.filename,
-        media_type=media_type,
-        input_path=str(saved),
-        fps=max(0.1, float(fps)),
-        ml_url=ml_url,
-        species_url=species_url,
-    )
-    logger.info(
-        "job_queued file=%s media_type=%s ml_url=%s species_url=%s",
-        media.filename,
-        media_type,
-        ml_url,
-        species_url,
-    )
+    jid, err = _enqueue_uploaded_file(media, fps=fps, ml_url=ml_url, species_url=species_url)
+    if err:
+        return RedirectResponse(url=f"/?msg={quote_plus(err)}", status_code=303)
+    if jid < 0:
+        return RedirectResponse(
+            url=f"/?msg={quote_plus(f'Already exists as job #{abs(jid)} for file: {media.filename}. Clear jobs or retry existing.')}",
+            status_code=303,
+        )
     return RedirectResponse(url="/", status_code=303)
+
+
+@app.post("/process-multi")
+async def process_multi(
+    media_files: list[UploadFile] = File(...),
+    fps: float = Form(1.0),
+    ml_url: str = Form("http://127.0.0.1:8010"),
+    species_url: str = Form("http://127.0.0.1:8100"),
+) -> RedirectResponse:
+    queued = 0
+    skipped = 0
+    bad = 0
+    for media in media_files:
+        jid, err = _enqueue_uploaded_file(media, fps=fps, ml_url=ml_url, species_url=species_url)
+        if err:
+            bad += 1
+            continue
+        if jid < 0:
+            skipped += 1
+        else:
+            queued += 1
+    return RedirectResponse(
+        url=f"/?msg={quote_plus(f'Queued {queued} file(s), skipped {skipped}, unsupported/missing {bad}.')}",
+        status_code=303,
+    )
 
 
 @app.get("/pause")
@@ -511,6 +670,7 @@ async def enqueue_folder(
     if not files:
         return RedirectResponse(url=f"/?msg={quote_plus(f'No matching files in {folder_path}')}", status_code=303)
     q = 0
+    skipped = 0
     for f in files:
         s = f.suffix.lower()
         if s in SUPPORTED_VIDEOS:
@@ -519,17 +679,71 @@ async def enqueue_folder(
             mt = "image"
         else:
             continue
-        db.add_job(
+        jid = db.add_job(
             filename=f.name,
             media_type=mt,
-            input_path=str(f),
+            input_path=_norm_path(f),
             fps=max(0.1, float(fps)),
             ml_url=ml_url,
             species_url=species_url,
         )
-        q += 1
-    logger.info("batch_enqueued count=%s folder=%s", q, folder_path)
-    return RedirectResponse(url=f"/?msg={quote_plus(f'Batch queued {q} file(s) from {folder_path}.')}", status_code=303)
+        if jid < 0:
+            skipped += 1
+        else:
+            q += 1
+    logger.info("batch_enqueued count=%s skipped=%s folder=%s", q, skipped, folder_path)
+    return RedirectResponse(
+        url=f"/?msg={quote_plus(f'Batch queued {q} file(s), skipped {skipped} existing file(s) from {folder_path}.')}",
+        status_code=303,
+    )
+
+
+@app.get("/cancel-all")
+async def cancel_all() -> RedirectResponse:
+    n = db.cancel_all_active()
+    logger.info("cancel_all affected=%s", n)
+    return RedirectResponse(url=f"/?msg={quote_plus(f'Cancelled {n} active job(s).')}", status_code=303)
+
+
+@app.get("/clear-jobs")
+async def clear_jobs() -> RedirectResponse:
+    if db.has_running_jobs():
+        return RedirectResponse(
+            url=f"/?msg={quote_plus('Cannot clear while a job is running. Cancel all first and wait a moment.')}",
+            status_code=303,
+        )
+    n = db.clear_all_jobs()
+    logger.info("clear_jobs removed=%s", n)
+    return RedirectResponse(url=f"/?msg={quote_plus(f'Cleared {n} job record(s).')}", status_code=303)
+
+
+@app.get("/reset-all")
+async def reset_all() -> RedirectResponse:
+    cancelled = db.cancel_all_active()
+    if OUT_DIR.is_dir():
+        for d in OUT_DIR.glob("run_*"):
+            if d.is_dir():
+                shutil.rmtree(d, ignore_errors=True)
+    if IN_DIR.is_dir():
+        for f in IN_DIR.glob("*"):
+            if f.is_file():
+                try:
+                    f.unlink()
+                except Exception:
+                    pass
+    if VID_DIR.is_dir():
+        for f in VID_DIR.glob("*"):
+            if f.is_file():
+                try:
+                    f.unlink()
+                except Exception:
+                    pass
+    removed = db.clear_all_jobs()
+    logger.info("reset_all cancelled=%s cleared=%s", cancelled, removed)
+    return RedirectResponse(
+        url=f"/?msg={quote_plus(f'Reset complete. Cancelled {cancelled} active job(s), cleared {removed} jobs, and removed generated files.')}",
+        status_code=303,
+    )
 
 
 @app.get("/open-output/{job_id}")
@@ -625,9 +839,13 @@ async def browse_output(job_id: int) -> HTMLResponse:
 
 @app.get("/cleanup-output")
 async def cleanup_output() -> RedirectResponse:
+    active_dirs: set[str] = set()
+    for j in db.list_jobs(limit=500):
+        if j.get("status") in ("queued", "running") and j.get("output_dir"):
+            active_dirs.add(str(j.get("output_dir")))
     if OUT_DIR.is_dir():
         for d in OUT_DIR.glob("run_*"):
-            if d.is_dir():
+            if d.is_dir() and str(d) not in active_dirs:
                 shutil.rmtree(d, ignore_errors=True)
     logger.info("cleanup_output done")
     return RedirectResponse(url="/", status_code=303)

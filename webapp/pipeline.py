@@ -77,7 +77,13 @@ def call_species(image_path: Path, species_url: str) -> dict[str, Any]:
     return r.json()
 
 
-def draw_boxes(image_path: Path, det: dict[str, Any], out_path: Path, species_label: str | None = None) -> None:
+def draw_boxes(
+    image_path: Path,
+    det: dict[str, Any],
+    out_path: Path,
+    species_label: str | None = None,
+    species_score: float | None = None,
+) -> None:
     im = Image.open(image_path).convert("RGB")
     d = ImageDraw.Draw(im)
     w, h = im.size
@@ -95,17 +101,27 @@ def draw_boxes(image_path: Path, det: dict[str, Any], out_path: Path, species_la
             continue
         x1, y1, x2, y2 = bbox
         d.rectangle((x1, y1, x2, y2), outline=(144, 238, 144), width=3)
-        base = f"{obj.get('class', '?')} {float(obj.get('confidence', 0.0)):.2f}"
-        label = base if not clean_species else f"{base} | {clean_species}"
+        det_class = str(obj.get("class", "?")).replace("_", " ").strip().lower()
+        det_conf = float(obj.get("confidence", 0.0)) * 100.0
+        line1 = f"{det_class}: {det_conf:.0f}%"
+        line2 = ""
+        if clean_species:
+            if isinstance(species_score, (float, int)):
+                line2 = f"{clean_species.lower()}: {float(species_score) * 100.0:.1f}%"
+            else:
+                line2 = clean_species.lower()
+        label_lines = [line1] + ([line2] if line2 else [])
+        label = "\n".join(label_lines)
         tx = int(x1 + 4)
-        ty = int(max(0, y1 - font_size - 8))
+        ty = int(max(0, y1 - (font_size * max(1, len(label_lines))) - 12))
         try:
-            l, t, r, b = d.textbbox((0, 0), label, font=font)
+            l, t, r, b = d.multiline_textbbox((0, 0), label, font=font, spacing=2)
             tw, th = (r - l), (b - t)
         except Exception:
-            tw, th = (len(label) * max(8, font_size // 2), font_size + 4)
+            longest = max(len(x) for x in label_lines)
+            tw, th = (longest * max(8, font_size // 2), (font_size + 4) * len(label_lines))
         d.rectangle((tx - 3, ty - 2, tx + tw + 4, ty + th + 2), fill=(15, 23, 42))
-        d.text((tx, ty), label, fill=(167, 243, 208), font=font)
+        d.multiline_text((tx, ty), label, fill=(167, 243, 208), font=font, spacing=2)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     im.save(out_path)
 
@@ -116,10 +132,13 @@ def process_images(
     ml_url: str,
     species_url: str,
     progress_cb: Any | None = None,
+    should_continue_cb: Any | None = None,
 ) -> list[dict[str, str]]:
     output_dir.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, str]] = []
     for idx, img in enumerate(images, start=1):
+        if should_continue_cb is not None and not bool(should_continue_cb()):
+            raise RuntimeError("Job cancelled by user.")
         name = img.stem
         ml_json = output_dir / f"{name}.ml.json"
         sp_json = output_dir / f"{name}.species.json"
@@ -129,7 +148,14 @@ def process_images(
         ml_json.write_text(json.dumps(det, indent=2), encoding="utf-8")
         sp_json.write_text(json.dumps(sp, indent=2), encoding="utf-8")
         species_label = sp.get("prediction")
-        draw_boxes(img, det, ann_img, species_label=species_label if isinstance(species_label, str) else None)
+        species_score = sp.get("score")
+        draw_boxes(
+            img,
+            det,
+            ann_img,
+            species_label=species_label if isinstance(species_label, str) else None,
+            species_score=float(species_score) if isinstance(species_score, (int, float)) else None,
+        )
         rows.append(
             {
                 "input": str(img),
