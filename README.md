@@ -137,3 +137,9 @@ If you want overrides, copy `config/stack.example.json` to `config/stack.json` a
 
 - Keep this repository public or private as desired.
 - GHCR package visibility is managed separately per package.
+
+### GHCR packages and this repo
+
+Images built from `wildlife-ai-system` declare `org.opencontainers.image.source` pointing at **this** repository. After you **rebuild and push** each image to GHCR (for example **Actions → Wildlife AI — Docker images** in that repo, or `docker push` from a local build), GitHub can associate the container package with this repo so the package page can show this README.
+
+For images already on GHCR before that label existed, an org admin can open each package → **Package settings** → **Connect repository** and choose this repo. See [Connecting a repository to a package](https://docs.github.com/packages/managing-container-images-with-github-container-registry/connecting-a-repository-to-a-container-image).
