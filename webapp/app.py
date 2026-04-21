@@ -9,6 +9,7 @@ import subprocess
 import shutil
 import threading
 import time
+from urllib.parse import quote_plus
 from datetime import datetime
 from pathlib import Path
 
@@ -425,8 +426,8 @@ async def startup_event() -> None:
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index() -> str:
-    return _render_page()
+async def index(msg: str = "") -> str:
+    return _render_page(msg)
 
 
 @app.post("/process", response_class=HTMLResponse)
@@ -440,10 +441,10 @@ async def process(
     VID_DIR.mkdir(parents=True, exist_ok=True)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     if not media.filename:
-        return HTMLResponse(_render_page("Missing filename"))
+        return RedirectResponse(url=f"/?msg={quote_plus('Missing filename')}", status_code=303)
     suffix = Path(media.filename).suffix.lower()
     if suffix not in SUPPORTED_IMAGES and suffix not in SUPPORTED_VIDEOS:
-        return HTMLResponse(_render_page(f"Unsupported type: {suffix}"))
+        return RedirectResponse(url=f"/?msg={quote_plus(f'Unsupported type: {suffix}')}", status_code=303)
     media_type = "video" if suffix in SUPPORTED_VIDEOS else "image"
     saved = (VID_DIR if media_type == "video" else IN_DIR) / media.filename
     with saved.open("wb") as f:
@@ -504,11 +505,11 @@ async def enqueue_folder(
 ) -> HTMLResponse:
     p = Path(folder_path)
     if not p.is_dir():
-        return HTMLResponse(_render_page(f"Folder not found: {folder_path}"))
+        return RedirectResponse(url=f"/?msg={quote_plus(f'Folder not found: {folder_path}')}", status_code=303)
     wanted = {x.strip().lower() for x in exts.split(",") if x.strip()}
     files = [f for f in sorted(p.rglob("*")) if f.is_file() and f.suffix.lower() in wanted]
     if not files:
-        return HTMLResponse(_render_page(f"No matching files in {folder_path}"))
+        return RedirectResponse(url=f"/?msg={quote_plus(f'No matching files in {folder_path}')}", status_code=303)
     q = 0
     for f in files:
         s = f.suffix.lower()
@@ -528,7 +529,7 @@ async def enqueue_folder(
         )
         q += 1
     logger.info("batch_enqueued count=%s folder=%s", q, folder_path)
-    return HTMLResponse(_render_page(f"Batch queued {q} file(s) from {folder_path}."))
+    return RedirectResponse(url=f"/?msg={quote_plus(f'Batch queued {q} file(s) from {folder_path}.')}", status_code=303)
 
 
 @app.get("/open-output/{job_id}")
