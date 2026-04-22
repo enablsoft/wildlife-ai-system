@@ -45,7 +45,7 @@ def render_home_page_html(
     return f"""<!doctype html>
 <html><head><meta charset='utf-8'/>
 <meta name='viewport' content='width=device-width, initial-scale=1'/>
-<title>Wildlife Processor</title>
+<title>Wildlife Processing Console</title>
 <style>
 body{{font-family:Inter,Segoe UI,Arial,sans-serif;background:#f6f8fb;color:#1e293b;margin:0}}
 .wrap{{max-width:1200px;margin:0 auto;padding:20px}}
@@ -106,9 +106,9 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
 .app-modal{{position:fixed;inset:0;z-index:10000;display:none;align-items:center;justify-content:center}}
 .app-modal.show{{display:flex}}
 .app-modal-backdrop{{position:absolute;inset:0;background:rgba(15,23,42,.55)}}
-.app-modal-box{{position:relative;z-index:1;background:#fff;border-radius:12px;padding:18px;max-width:min(720px,94vw);max-height:min(88vh,900px);overflow:auto;box-shadow:0 10px 40px rgba(0,0,0,.2)}}
-.app-modal-title{{font-size:18px;font-weight:700;margin-bottom:10px;color:#0f172a}}
-.app-modal-body{{margin-bottom:14px;font-size:14px;color:#334155;line-height:1.45}}
+.app-modal-box{{position:relative;z-index:1;background:#fff;border-radius:12px;padding:14px;max-width:min(720px,94vw);max-height:min(88vh,900px);overflow:auto;box-shadow:0 10px 40px rgba(0,0,0,.2)}}
+.app-modal-title{{font-size:19px;font-weight:700;margin-bottom:8px;color:#0f172a}}
+.app-modal-body{{margin-bottom:10px;font-size:15px;color:#334155;line-height:1.35;white-space:pre-line}}
 .app-modal-actions{{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}}
 .enqueue-row{{display:flex;align-items:flex-start;gap:8px;padding:8px;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:6px;background:#f8fafc}}
 .enqueue-row.disabled{{opacity:.65}}
@@ -119,9 +119,12 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
 .viewer-controls{{display:flex;gap:8px;align-items:center;color:#e2e8f0}}
 .viewer-canvas{{overflow:auto;background:#020617;border:1px solid #1e293b;border-radius:8px;display:flex;align-items:flex-start;justify-content:flex-start}}
 .viewer-img{{transform-origin:top left;max-width:none;max-height:none}}
+.preview-table{{width:100%;border-collapse:collapse;margin-top:8px}}
+.preview-table th,.preview-table td{{border:1px solid #e2e8f0;padding:6px 8px;text-align:left;font-size:13px}}
+.preview-table th{{background:#f8fafc}}
 </style></head>
 <body><div class='wrap'>
-<div class='top'><div class='title'>Wildlife Processor</div><div class='badge'>{'Paused' if paused else 'Running'}</div></div>
+<div class='top'><div class='title'>Wildlife Processing Console</div><div class='badge'>{'Paused' if paused else 'Running'}</div></div>
 <div class='msg'>{msg}</div>
 <div class='row'>
   <div class='panel'>
@@ -129,7 +132,9 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
     <div class='actions'>
       <a class='btn btn-subtle js-action' href='/pause'>Pause</a>
       <a class='btn btn-subtle js-action' href='/resume'>Resume</a>
-      <a class='btn btn-subtle js-action' href='/cancel-all' data-confirm='Cancel all queued and running jobs?'>Cancel All</a>
+      <a class='btn btn-subtle js-action' href='/cancel-all' data-confirm='Cancel all queued and running jobs?
+
+This keeps your existing job history and generated files.'>Cancel All</a>
       <a class='btn btn-subtle' href='/' >Refresh</a>
     </div>
     <div class='counts'>
@@ -161,7 +166,7 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
       Drag & drop files here
     </div>
     <div style='height:8px'></div>
-    <button class='btn' type='button' onclick='queueSelectedFiles()'>Queue Selected Files</button>
+    <button class='btn' type='button' onclick='queueSelectedFiles()'>Add Selected Files to Queue</button>
   </div>
 </div>
 <div class='panel' style='margin-top:16px'>
@@ -183,7 +188,7 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
     <label>Species URL</label>
     <input id='enqueueSpecies' name='species_url' value='http://127.0.0.1:8100' />
     <div style='height:10px'></div>
-    <button class='btn' type='button' id='btnEnqueuePreview' onclick='previewEnqueueFolder()'>Preview &amp; queue</button>
+    <button class='btn' type='button' id='btnEnqueuePreview' onclick='previewEnqueueFolder()'>Preview and Queue Files</button>
   </form>
 </div>
 <div class='panel' style='margin-top:16px'>
@@ -257,10 +262,26 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
     <h3 style='margin-top:0'>Data Retention</h3>
     <p class='job-meta'>Manage retained outputs and job history. Cleanup only removes completed run folders under the configured output path. Active queued/running job output folders are preserved.</p>
     <div class='actions'>
-      <a class='btn btn-subtle js-action' href='/cleanup-output' data-confirm='Delete all run_* output folders under {output_label}? Active job output folders are skipped.'>Cleanup Output Folder</a>
-      <a class='btn btn-subtle js-action' href='/reset-generated-media' data-confirm='Delete generated/local media files (input, video, and run_* outputs) but keep SQL job history? Active job folders are preserved.'>Reset Generated Media</a>
-      <a class='btn btn-subtle js-action' href='/clear-jobs' data-confirm='Clear all job records from the SQL database? This cannot be undone.'>Clear SQL Job History</a>
-      <a class='btn btn-subtle js-action' href='/reset-all' data-confirm='Reset everything? This will cancel active jobs, clear SQL job history, and delete generated/local media and output files.'>Reset All (Media + SQL History)</a>
+      <a class='btn btn-subtle js-action' href='/cleanup-output' data-confirm='Delete completed run output folders under:
+{output_label}
+
+Active queued/running job folders will be preserved.'>Cleanup Output Folder</a>
+      <a class='btn btn-subtle js-action' href='/reset-generated-media' data-confirm='Delete generated/local media files:
+- input
+- video
+- run_* outputs
+
+SQL job history will be kept.
+Active job folders will be preserved.'>Reset Generated Media</a>
+      <a class='btn btn-subtle js-action' href='/clear-jobs' data-confirm='Clear all job records from the SQL database?
+
+This action cannot be undone.'>Clear SQL Job History</a>
+      <a class='btn btn-subtle js-action' href='/reset-all' data-confirm='Reset everything?
+
+This will:
+- cancel active jobs
+- clear SQL job history
+- delete generated/local media and output files'>Reset All (Media + SQL History)</a>
     </div>
   </div>
   <div class='panel' style='margin-top:10px'>
@@ -309,7 +330,7 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
     <div id='enqueuePreviewList'></div>
     <div class='app-modal-actions'>
       <button type='button' class='btn btn-subtle' id='enqueuePreviewCancel'>Cancel</button>
-      <button type='button' class='btn' id='enqueuePreviewOk'>Queue selected</button>
+      <button type='button' class='btn' id='enqueuePreviewOk'>Queue Selected Files</button>
     </div>
   </div>
 </div>
@@ -381,11 +402,16 @@ function formatSpeciesLabel(r) {{
   if (isBlankRecord(r)) return 'No species match (blank)';
   return r.species || '—';
 }}
-function openConfirmModal(message) {{
+function openConfirmModal(message, opts = {{}}) {{
   return new Promise((resolve) => {{
     _confirmResolve = resolve;
+    const title = document.getElementById('appConfirmTitle');
     const b = document.getElementById('appConfirmBody');
-    if (b) b.textContent = message;
+    if (title) title.textContent = String(opts.title || 'Please Confirm');
+    if (b) {{
+      if (opts.html) b.innerHTML = String(opts.html);
+      else b.textContent = String(message || '');
+    }}
     document.getElementById('appConfirmModal')?.classList.add('show');
   }});
 }}
@@ -442,7 +468,7 @@ async function saveTagEditValue(nextValue) {{
   }});
   const data = await res.json();
   if (!data.ok) {{
-    await openConfirmModal(data.error || 'Failed to save manual tag.');
+    await openConfirmModal(data.error || 'Unable to save manual tags. Please try again.', {{ title: 'Save Manual Tags' }});
     return;
   }}
   closeTagEditModal();
@@ -462,12 +488,12 @@ async function previewEnqueueFolder() {{
   }});
   const data = await res.json();
   if (!data.ok) {{
-    await openConfirmModal(data.error || 'Preview failed');
+    await openConfirmModal(data.error || 'Unable to preview this folder. Please check the path and try again.', {{ title: 'Preview Folder' }});
     return;
   }}
   const items = data.items || [];
   if (items.length === 0) {{
-    await openConfirmModal('No matching media files in that folder.');
+    await openConfirmModal('No matching media files were found in the selected folder.\\n\\nCheck the folder path and extension filters, then try again.', {{ title: 'Preview Folder' }});
     return;
   }}
   const fps = document.getElementById('enqueueFps')?.value || '1';
@@ -520,7 +546,7 @@ async function commitEnqueuePreview() {{
     if (!cb.disabled && cb.checked && cb.dataset.path) paths.push(cb.dataset.path);
   }});
   if (paths.length === 0) {{
-    await openConfirmModal('Select at least one file to queue (enable checkbox for completed items to re-run).');
+    await openConfirmModal('Select at least one file to queue.\\n\\nTip: completed files are unchecked by default, but you can enable them to re-run.', {{ title: 'Queue Selected Files' }});
     return;
   }}
   const body = {{
@@ -539,7 +565,7 @@ async function commitEnqueuePreview() {{
   const data = await res.json();
   closeEnqueuePreview();
   if (!data.ok) {{
-    await openConfirmModal(data.error || 'Queue failed');
+    await openConfirmModal(data.error || 'Unable to queue selected files. Please try again.', {{ title: 'Queue Selected Files' }});
     return;
   }}
   const u = new URL(window.location.origin + '/');
@@ -663,8 +689,30 @@ async function previewExcelExport() {{
     ? FRAME_RECORDS.filter((r) => !isBlankRecord(r))
     : FRAME_RECORDS.slice();
   const mode = hideBlanks ? 'Hide blank frames: ON' : 'Hide blank frames: OFF';
-  const msg = `Excel export preview\\n\\nRows to export: ${{rows.length}}\\n${{mode}}\\nIncludes: default_species_short, default_species_type, manual_tag\\n\\nProceed with export?`;
-  const ok = await openConfirmModal(msg);
+  const sample = rows.slice(0, 5);
+  const tableRows = sample.map((r) => {{
+    const species = esc(formatSpeciesLabel(r));
+    const shortTag = esc(String(r.species_short || ''));
+    const typeTag = esc(String(r.species_type || ''));
+    const manual = esc(String(r.manual_tag || ''));
+    return `<tr><td>${{esc(String(r.source || ''))}}</td><td>${{esc(String(r.frame || ''))}}</td><td>${{species}}</td><td>${{shortTag}}</td><td>${{typeTag}}</td><td>${{manual}}</td></tr>`;
+  }}).join('');
+  const html = `
+    <div><b>Rows to export:</b> ${{rows.length}}</div>
+    <div><b>${{mode}}</b></div>
+    <div style="margin-top:6px">Columns include: <code>default_species_short</code>, <code>default_species_type</code>, <code>manual_tag</code>.</div>
+    <div style="margin-top:8px"><b>Preview (first ${{sample.length}} rows)</b></div>
+    <table class="preview-table">
+      <thead>
+        <tr><th>Video</th><th>Frame</th><th>Species</th><th>Default Short</th><th>Default Type</th><th>Manual Tag</th></tr>
+      </thead>
+      <tbody>
+        ${{tableRows || "<tr><td colspan='6'>No rows available with current filters.</td></tr>"}}
+      </tbody>
+    </table>
+    <div style="margin-top:10px">Proceed with export/download?</div>
+  `;
+  const ok = await openConfirmModal('', {{ title: 'Excel Export Preview', html: html }});
   if (!ok) return;
   const u = new URL('/export/frame-results.xlsx', window.location.origin);
   u.searchParams.set('hide_blanks', hideBlanks ? '1' : '0');
@@ -693,19 +741,20 @@ async function ensureBatchOutputChoice(folderPath) {{
   if (!currentVideo || folder.toLowerCase() === currentVideo.toLowerCase()) return true;
   if (_lastBatchFolderPrompt.toLowerCase() === folder.toLowerCase()) return true;
 
+  const defaultOut = String(outputEl.value || '');
   const useDefault = window.confirm(
-    `Batch folder changed to:\\n${{folder}}\\n\\nUse default output folder?\\n\\nOK = keep default output (${{outputEl.value || ''}})\\nCancel = set a custom output folder now`
+    `Batch folder changed:\\n${{folder}}\\n\\nWould you like to keep the current default output folder?\\n\\nOK = Keep default output\\n(${{defaultOut}})\\n\\nCancel = Choose a custom output folder now`
   );
   if (useDefault) {{
     _lastBatchFolderPrompt = folder;
     return true;
   }}
 
-  const custom = window.prompt('Enter output folder path for this batch folder:', outputEl.value || '');
+  const custom = window.prompt('Enter the output folder path to use for this batch folder:', outputEl.value || '');
   if (custom === null) return false;
   const customOut = String(custom || '').trim();
   if (!customOut) {{
-    await openConfirmModal('Output folder cannot be empty.');
+    await openConfirmModal('Output folder cannot be empty.\\n\\nPlease enter a valid folder path.', {{ title: 'Set Output Folder' }});
     return false;
   }}
 
@@ -720,7 +769,7 @@ async function ensureBatchOutputChoice(folderPath) {{
   }});
   const data = await res.json();
   if (!data.ok) {{
-    await openConfirmModal(data.error || 'Failed to save output folder.');
+    await openConfirmModal(data.error || 'Unable to save the output folder. Please verify the path and try again.', {{ title: 'Set Output Folder' }});
     return false;
   }}
   videoEl.value = data.video_dir || folder;
