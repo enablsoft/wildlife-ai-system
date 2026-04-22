@@ -388,6 +388,12 @@ Use this when moving existing runtime metadata from SQLite to Mongo.
    .\scripts\migrate-sqlite-to-mongo.ps1
    ```
 
+   Validate sync:
+
+   ```powershell
+   .\scripts\check-sync.ps1
+   ```
+
 5. **Switch runtime backend**
 
    ```dotenv
@@ -427,6 +433,13 @@ Run backend smoke tests with one command:
 
 ```powershell
 .\scripts\test-backends.ps1
+```
+
+Bi-directional migration helper (Mongo -> SQLite):
+
+```powershell
+.\scripts\migrate-mongo-to-sqlite.ps1 -DryRun
+.\scripts\migrate-mongo-to-sqlite.ps1
 ```
 
 ---

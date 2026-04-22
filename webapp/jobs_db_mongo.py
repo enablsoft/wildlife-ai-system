@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from pymongo import ASCENDING, DESCENDING, MongoClient
@@ -11,7 +11,7 @@ from pymongo.errors import DuplicateKeyError
 
 
 def _utc_now_str() -> str:
-    return datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 class MongoJobsDb:

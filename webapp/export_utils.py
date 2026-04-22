@@ -44,7 +44,7 @@ def format_species_display(species: str, description: str) -> str:
     """Format species text for UI display."""
     if record_is_blank(species, description):
         return "No species match (blank)"
-    return species or "—"
+    return short_species_label(species, description)
 
 
 def short_species_label(species: str, description: str) -> str:

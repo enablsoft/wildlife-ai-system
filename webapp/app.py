@@ -217,6 +217,17 @@ def _species_short_name(species: str) -> str:
     return _clean_species(species)
 
 
+def _species_latin_name(species: str) -> str:
+    parts = [p.strip() for p in (species or "").split(";") if p.strip()]
+    if len(parts) >= 2:
+        genus = parts[-2].replace("_", " ").strip().title()
+        epithet = parts[-1].replace("_", " ").strip().title()
+        return f"{genus} {epithet}".strip()
+    if len(parts) == 1:
+        return parts[-1].replace("_", " ").strip().title()
+    return ""
+
+
 def _species_type_tag(species: str) -> str:
     s = (species or "").lower()
     if not s or "__blank" in s:
@@ -296,8 +307,10 @@ def _frame_records(jobs: list[dict[str, object]]) -> list[dict[str, str]]:
                                 det_conf = f"{float(c):.2f}"
                 except Exception:
                     pass
+            species_short = _species_short_name(species)
+            species_latin = _species_latin_name(species)
             desc = (
-                f"Likely {species}"
+                f"Likely {species_short}" + (f" ({species_latin})" if species_latin else "")
                 + (f" ({species_conf})" if species_conf else "")
                 + f" in {source}, frame {frame_name}. "
                 + f"Detector: {det_class}"
@@ -316,7 +329,8 @@ def _frame_records(jobs: list[dict[str, object]]) -> list[dict[str, str]]:
                     "species": species,
                     "description": desc,
                     "annotated_rel": ann_rel,
-                    "species_short": _species_short_name(species),
+                    "species_short": species_short,
+                    "species_latin": species_latin,
                     "species_type": _species_type_tag(species),
                 }
             )
@@ -356,10 +370,11 @@ def _aggregate_video_source_summary(
     return video_summary
 
 
-def _home_query(page: int, hide_blanks: bool, summary_page: int) -> str:
+def _home_query(page: int, hide_blanks: bool, summary_page: int, species_mode: str) -> str:
     """Query string for home page links (preserve frame + summary pagination)."""
     hb = 1 if hide_blanks else 0
-    return f"page={page}&hide_blanks={hb}&summary_page={summary_page}"
+    mode = species_mode if species_mode in ("short", "latin", "full") else "short"
+    return f"page={page}&hide_blanks={hb}&summary_page={summary_page}&species_mode={mode}"
 
 
 def _record_is_blank(species: str, description: str) -> bool:
@@ -379,8 +394,11 @@ def _render_page(
     page: int = 1,
     hide_blanks: bool = True,
     summary_page: int = 1,
+    species_mode: str = "short",
 ) -> str:
     """Prepare home-page view data and delegate HTML rendering."""
+    if species_mode not in ("short", "latin", "full"):
+        species_mode = "short"
     input_dir, video_dir, output_dir = _runtime_dirs()
     jobs = db.list_jobs(limit=JOBS_PANEL_LIMIT)
     tags_map = db.get_frame_tags_map()
@@ -483,7 +501,7 @@ def _render_page(
     else:
         if summary_page > 1:
             summary_pagination_bits.append(
-                f"<a class='btn btn-subtle btn-compact' href='/?{_home_query(page, hide_blanks, summary_page - 1)}'>Prev</a>"
+                f"<a class='btn btn-subtle btn-compact' href='/?{_home_query(page, hide_blanks, summary_page - 1, species_mode)}'>Prev</a>"
             )
         summary_pagination_bits.append(
             f"<span class='job-meta'>Sources {ss + 1}–{min(se, total_summary_sources)} of "
@@ -491,7 +509,7 @@ def _render_page(
         )
         if summary_page < summary_total_pages:
             summary_pagination_bits.append(
-                f"<a class='btn btn-subtle btn-compact' href='/?{_home_query(page, hide_blanks, summary_page + 1)}'>Next</a>"
+                f"<a class='btn btn-subtle btn-compact' href='/?{_home_query(page, hide_blanks, summary_page + 1, species_mode)}'>Next</a>"
             )
     summary_rows = []
     for v in summary_slice:
@@ -523,7 +541,17 @@ def _render_page(
         )
     result_rows: list[str] = []
     for r in page_records:
-        species_disp = _format_species_display(r["species"], r["description"])
+        species_short = str(r.get("species_short") or _species_short_name(r["species"]))
+        species_latin = str(r.get("species_latin") or _species_latin_name(r["species"]))
+        species_full = str(r.get("species") or "")
+        if _record_is_blank(r["species"], r["description"]):
+            species_disp = "No species match (blank)"
+        elif species_mode == "latin":
+            species_disp = species_latin or species_short or species_full or "—"
+        elif species_mode == "full":
+            species_disp = species_full or species_short or "—"
+        else:
+            species_disp = species_short or species_full or "—"
         is_blank = _record_is_blank(r["species"], r["description"])
         search_blob = (
             r["source"]
@@ -540,14 +568,16 @@ def _render_page(
             + " "
             + (r.get("species_short") or "")
             + " "
+            + (r.get("species_latin") or "")
+            + " "
             + (r.get("species_type") or "")
             + " blank no species match"
         )
         manual_tag = str(r.get("manual_tag") or "")
         manual_bits = [t.strip() for t in manual_tag.split(",") if t.strip()]
         default_bits = []
-        if r.get("species_short"):
-            default_bits.append(str(r.get("species_short")))
+        if species_short:
+            default_bits.append(species_short)
         if r.get("species_type"):
             default_bits.append(str(r.get("species_type")))
         all_filter_bits = []
@@ -567,6 +597,12 @@ def _render_page(
         if manual_bits:
             manual_chips = "".join([f"<span class='tag-chip'>{html.escape(t)}</span>" for t in manual_bits])
             manual_html = f"<div><b>Manual tags:</b></div><div class='tag-list'>{manual_chips}</div>"
+        latin_html = f"<div><b>Latin:</b> {html.escape(species_latin)}</div>" if species_latin and not is_blank else ""
+        taxonomy_html = (
+            f"<div><b>Taxonomy:</b> {html.escape(species_full)}</div>"
+            if species_full and not is_blank and species_full != species_disp
+            else ""
+        )
         rel_js = json.dumps(str(r.get("annotated_rel") or ""))
         result_rows.append(
             "<div class='result-card result-row' "
@@ -581,6 +617,8 @@ def _render_page(
             f"<div><b>Video:</b> {html.escape(r['source'])}</div>"
             f"<div><b>Frame:</b> {html.escape(r['frame'])}</div>"
             f"<div><b>Species:</b> {html.escape(species_disp)}</div>"
+            f"{latin_html}"
+            f"{taxonomy_html}"
             f"{default_html}{manual_html}"
             f"<div class='desc-col' title='{html.escape(r['description'], quote=True)}'>{html.escape(r['description'])}</div>"
             f"<div style='margin-top:4px'><button class='btn btn-subtle' type='button' onclick='editManualTag({rel_js})'>Edit tag</button></div>"
@@ -590,7 +628,7 @@ def _render_page(
     pagination_bits: list[str] = []
     if page > 1:
         pagination_bits.append(
-            f"<a class='btn btn-subtle btn-compact' href='/?{_home_query(page - 1, hide_blanks, summary_page)}'>Prev</a>"
+            f"<a class='btn btn-subtle btn-compact' href='/?{_home_query(page - 1, hide_blanks, summary_page, species_mode)}'>Prev</a>"
         )
     pagination_bits.append(
         f"<span class='job-meta'>Page {page} / {total_pages} ({total_records} total, "
@@ -598,7 +636,7 @@ def _render_page(
     )
     if page < total_pages:
         pagination_bits.append(
-            f"<a class='btn btn-subtle btn-compact' href='/?{_home_query(page + 1, hide_blanks, summary_page)}'>Next</a>"
+            f"<a class='btn btn-subtle btn-compact' href='/?{_home_query(page + 1, hide_blanks, summary_page, species_mode)}'>Next</a>"
         )
     has_active = counts.get("queued", 0) > 0 or counts.get("running", 0) > 0
     # Always embed all frames so the video browser checkbox can reveal blanks without a full reload.
@@ -622,6 +660,7 @@ def _render_page(
         input_label=input_label,
         video_label=video_label,
         hide_blanks=hide_blanks,
+        species_mode=species_mode,
         has_active=has_active,
         records_json=records_json,
     )
@@ -669,12 +708,14 @@ async def index(
     page: int = 1,
     hide_blanks: int = Query(1, ge=0, le=1),
     summary_page: int = Query(1, ge=1),
+    species_mode: str = Query("short"),
 ) -> str:
     return _render_page(
         msg,
         page=page,
         hide_blanks=bool(hide_blanks),
         summary_page=summary_page,
+        species_mode=species_mode,
     )
 
 
@@ -876,8 +917,10 @@ async def browse_output(job_id: int) -> HTMLResponse:
             except Exception:
                 pass
         rel = ann.relative_to(ROOT).as_posix()
+        sp_short = _species_short_name(species)
+        sp_latin = _species_latin_name(species)
         desc = (
-            f"Likely {species}"
+            f"Likely {sp_short}" + (f" ({sp_latin})" if sp_latin else "")
             + (f" ({species_conf})" if species_conf else "")
             + f" in frame {base}. Detector: {det_class}"
             + (f" ({det_conf})" if det_conf else "")

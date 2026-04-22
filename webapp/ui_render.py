@@ -38,6 +38,7 @@ def render_home_page_html(
     input_label: str,
     video_label: str,
     hide_blanks: bool,
+    species_mode: str,
     has_active: bool,
     records_json: str,
 ) -> str:
@@ -97,6 +98,7 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
 .frame-list{{max-height:340px;overflow:auto;border:1px solid #e2e8f0;border-radius:8px;padding:8px;background:#fff;box-sizing:border-box}}
 .video-item,.frame-item{{display:block;width:100%;text-align:left;padding:7px 8px;border:1px solid #dbe3ef;border-radius:6px;background:#f8fafc;color:#0f172a;cursor:pointer;margin-bottom:6px;box-sizing:border-box;overflow-wrap:anywhere}}
 .video-item.active,.frame-item.active{{background:#dbeafe;border-color:#93c5fd}}
+.frame-item .job-meta{{margin-top:2px}}
 .inline-preview{{border:1px solid #e2e8f0;border-radius:8px;padding:8px;background:#fff;display:grid;gap:8px;min-width:0;max-width:100%;max-height:340px;overflow:auto;box-sizing:border-box}}
 .inline-preview .job-meta{{overflow-wrap:anywhere;word-break:break-word}}
 .inline-preview img{{display:block;width:100%;max-width:100%;height:auto;max-height:min(260px,42vh);object-fit:contain;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box}}
@@ -257,6 +259,14 @@ This keeps your existing job history and generated files.'>Cancel All</a>
     <p class='job-meta' style='margin:0 0 8px 0'>Up to <b>{frame_results_page_size}</b> rows per page. Blank visibility: <b>Settings</b> tab.</p>
     <div class='actions' style='margin:0 0 8px 0'>
       <button class='btn btn-subtle btn-compact' type='button' onclick='previewExcelExport()'>Export Excel (Videos + Frames + Species)</button>
+      <label for='exportPreviewRows' class='job-meta' style='display:inline-flex;align-items:center;gap:6px;margin:0'>
+        Preview rows
+        <select id='exportPreviewRows' style='padding:4px 6px;border:1px solid #cbd5e1;border-radius:6px;background:#fff'>
+          <option value='5' selected>5</option>
+          <option value='10'>10</option>
+          <option value='20'>20</option>
+        </select>
+      </label>
       <span class='job-meta'>Includes default species short/type tags and manual tags.</span>
     </div>
     <label>Search by species, video, frame, or description</label>
@@ -326,6 +336,14 @@ This will:
   <div class='panel' style='margin-top:10px'>
     <h3 style='margin-top:0'>Display</h3>
     <p class='job-meta'>One setting for both <b>Frame Results</b> (list + pagination) and <b>Video Frame Browser</b> (frame list + inline preview). Blanks are frames with no species match (label ending in <code>Blank</code> or containing <code>__Blank</code>).</p>
+    <label style='display:block;margin-bottom:6px'>Species label mode</label>
+    <select id='settingsSpeciesMode' onchange='applySpeciesModeSetting()' style='width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-sizing:border-box'>
+      <option value='short' {'selected' if species_mode == 'short' else ''}>Short species label</option>
+      <option value='latin' {'selected' if species_mode == 'latin' else ''}>Latin name (Genus species)</option>
+      <option value='full' {'selected' if species_mode == 'full' else ''}>Full taxonomy path</option>
+    </select>
+    <p class='job-meta' style='margin-top:8px'>This updates species text in Frame Results and Video Frame Browser. Frame cards still show a dedicated Latin line when available.</p>
+    <div style='height:10px'></div>
     <label style='font-size:14px;display:flex;align-items:flex-start;gap:10px;cursor:pointer;max-width:52rem'>
       <input type='checkbox' id='settingsHideBlanks' style='width:auto;margin-top:4px' {'checked' if hide_blanks else ''} onchange='applyHideBlanksSetting()' />
       <span><b>Hide blank / no-match frames</b> — when checked, those frames are omitted from Frame Results and from the Video Frame Browser lists.</span>
@@ -408,6 +426,7 @@ const SCROLL_KEY = 'wildlife_ui_scroll_y';
 const HAS_ACTIVE = {"true" if has_active else "false"};
 const FRAME_RECORDS = {records_json};
 const HIDE_BLANKS = {"true" if hide_blanks else "false"};
+const SPECIES_MODE = {species_mode!r};
 let CURRENT_ZOOM = 100;
 let ACTIVE_VIDEO = '';
 let ACTIVE_FRAME = '';
@@ -425,6 +444,12 @@ function lastTaxonSegment(species) {{
   }}
   return '';
 }}
+function latinSpeciesName(species) {{
+  const parts = String(species || '').split(';').map((p) => p.trim()).filter((p) => !!p);
+  if (parts.length >= 2) return `${{parts[parts.length - 2].replace(/_/g, ' ')}} ${{parts[parts.length - 1].replace(/_/g, ' ')}}`;
+  if (parts.length === 1) return parts[0].replace(/_/g, ' ');
+  return '';
+}}
 function isBlankRecord(r) {{
   const s = String(r.species || '');
   const d = String(r.description || '').toLowerCase();
@@ -435,7 +460,15 @@ function isBlankRecord(r) {{
 function formatSpeciesLabel(r) {{
   if (!r) return '—';
   if (isBlankRecord(r)) return 'No species match (blank)';
-  return r.species || '—';
+  const shortName = String(r.species_short || lastTaxonSegment(r.species || '') || '').trim();
+  const latinName = String(r.species_latin || latinSpeciesName(r.species || '') || '').trim();
+  const fullName = String(r.species || '').trim();
+  if (SPECIES_MODE === 'latin') return latinName || shortName || fullName || '—';
+  if (SPECIES_MODE === 'full') return fullName || shortName || '—';
+  return shortName || fullName || '—';
+}}
+function fullTaxonomyLabel(r) {{
+  return String((r && r.species) || '').trim();
 }}
 function openConfirmModal(message, opts = {{}}) {{
   return new Promise((resolve) => {{
@@ -729,6 +762,16 @@ function applyHideBlanksSetting() {{
   u.searchParams.set('page', '1');
   window.location.href = u.toString();
 }}
+function applySpeciesModeSetting() {{
+  const el = document.getElementById('settingsSpeciesMode');
+  if (!el) return;
+  const mode = String(el.value || 'short').toLowerCase();
+  const chosen = (mode === 'latin' || mode === 'full') ? mode : 'short';
+  const u = new URL(window.location.href);
+  u.searchParams.set('species_mode', chosen);
+  u.searchParams.set('page', '1');
+  window.location.href = u.toString();
+}}
 async function previewExcelExport() {{
   const hideBlanks = HIDE_BLANKS;
   _exportPreviewHideBlanks = hideBlanks;
@@ -741,7 +784,10 @@ async function previewExcelExport() {{
   );
   if (!step1) return;
   const mode = hideBlanks ? 'Hide blank frames: ON' : 'Hide blank frames: OFF';
-  const sample = rows.slice(0, 5);
+  const previewRowsEl = document.getElementById('exportPreviewRows');
+  const parsedRows = Number(previewRowsEl?.value || '5');
+  const previewCount = [5, 10, 20].includes(parsedRows) ? parsedRows : 5;
+  const sample = rows.slice(0, previewCount);
   const tableRows = sample.map((r) => {{
     const species = esc(formatSpeciesLabel(r));
     const shortTag = esc(String(r.species_short || ''));
@@ -751,7 +797,7 @@ async function previewExcelExport() {{
   }}).join('');
   const summary = document.getElementById('exportPreviewSummary');
   if (summary) {{
-    summary.textContent = `Rows to export: ${{rows.length}}\\n${{mode}}\\nColumns include: default_species_short, default_species_type, manual_tag\\nPreview shown: first ${{sample.length}} row(s).`;
+    summary.textContent = `Rows to export: ${{rows.length}}\\n${{mode}}\\nColumns include: default_species_short, default_species_type, manual_tag\\nPreview shown: first ${{sample.length}} row(s) (setting: ${{previewCount}}).`;
   }}
   const tableWrap = document.getElementById('exportPreviewTableWrap');
   if (tableWrap) {{
@@ -879,10 +925,15 @@ function renderInlinePreview(r) {{
   }}
   const src = `/files/${{r.annotated_rel}}`;
   const sp = esc(formatSpeciesLabel(r));
+  const latin = esc(String(r.species_latin || latinSpeciesName(r.species || '') || ''));
+  const taxonomyRaw = fullTaxonomyLabel(r);
+  const taxonomy = esc(taxonomyRaw);
   const zoomTitle = `${{String(r.source || '').replace(/\\.[^.]+$/, '')}} - ${{r.frame || ''}}`;
   box.innerHTML = `
     <div><b>${{esc(r.source)}}</b></div>
     <div class='job-meta'>${{esc(r.frame)}} | ${{sp}}</div>
+    ${{latin && !isBlankRecord(r) ? `<div class='job-meta'><b>Latin:</b> ${{latin}}</div>` : ''}}
+    ${{taxonomyRaw && !isBlankRecord(r) && taxonomyRaw !== formatSpeciesLabel(r) ? `<div class='job-meta'><b>Taxonomy:</b> ${{taxonomy}}</div>` : ''}}
     <img src="${{src}}" alt="frame preview" loading="lazy" />
     <div class='job-meta'>${{esc(r.description || '')}}</div>
     <div><button class='btn btn-subtle' type='button' onclick="openViewer('${{src}}','${{zoomTitle.replace(/'/g, "\\\\'")}}')">Open Zoom Viewer</button></div>
@@ -933,8 +984,13 @@ function renderVideoBrowser() {{
   fList.innerHTML = frames.map((r) => {{
     const src = `/files/${{r.annotated_rel}}`;
     const active = String(r.annotated_rel) === ACTIVE_FRAME ? ' active' : '';
-    const text = `${{esc(String(r.frame))}} | ${{esc(formatSpeciesLabel(r))}}`;
-    return `<button class='frame-item${{active}}' type='button' data-src='${{src}}' data-id='${{esc(String(r.annotated_rel))}}' data-title='${{esc((r.source || '') + ' :: ' + (r.frame || ''))}}'>${{text}}</button>`;
+    const speciesText = esc(formatSpeciesLabel(r));
+    const taxonomyRaw = fullTaxonomyLabel(r);
+    const taxonomyText = esc(taxonomyRaw);
+    const taxonomyLine = (taxonomyRaw && !isBlankRecord(r) && taxonomyRaw !== formatSpeciesLabel(r))
+      ? `<div class='job-meta'>Taxonomy: ${{taxonomyText}}</div>`
+      : '';
+    return `<button class='frame-item${{active}}' type='button' data-src='${{src}}' data-id='${{esc(String(r.annotated_rel))}}' data-title='${{esc((r.source || '') + ' :: ' + (r.frame || ''))}}'><div>${{esc(String(r.frame))}} | ${{speciesText}}</div>${{taxonomyLine}}</button>`;
   }}).join('');
   fList.querySelectorAll('.frame-item').forEach((btn) => {{
     btn.addEventListener('click', () => {{
