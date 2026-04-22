@@ -8,6 +8,7 @@ Function index:
 """
 
 from datetime import datetime
+import os
 from pathlib import Path
 from typing import Any, Callable
 
@@ -73,9 +74,8 @@ def register_api_routes(
             video_root = default_video_root
 
         candidate = Path(raw).expanduser()
-        if candidate.is_absolute():
-            return None, "Folder path must be relative to runtime video folder."
-        candidate = (video_root / candidate).resolve(strict=False)
+        if not candidate.is_absolute():
+            candidate = (video_root / candidate).resolve(strict=False)
 
         try:
             resolved = candidate.resolve(strict=True)
@@ -83,9 +83,13 @@ def register_api_routes(
             return None, "Folder not found."
         if not resolved.is_dir():
             return None, "Folder path must be a directory."
+        resolved_norm = os.path.normcase(str(resolved))
+        video_root_norm = os.path.normcase(str(video_root))
         try:
-            resolved.relative_to(video_root)
+            within_video_root = os.path.commonpath([resolved_norm, video_root_norm]) == video_root_norm
         except ValueError:
+            within_video_root = False
+        if not within_video_root:
             return None, f"Folder must be inside runtime video folder: {video_root}"
         return resolved, None
 
