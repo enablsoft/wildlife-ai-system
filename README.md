@@ -113,6 +113,31 @@ Set full image names and tags in **`.env`** (see **`.env.example`**). If images 
 
 ---
 
+## Package roles
+
+The public deploy stack centers around three published container images:
+
+- **`wildlife-ai-ml-service`**: Core detector API. Runs the MegaDetector/YOLO-family inference pipeline and returns structured detections (bounding boxes, classes, confidence).
+- **`wildlife-ai-batch-ui`**: Batch workflow UI and orchestration surface. Provides queue/run management and result browsing; it does not host model weights itself.
+- **`wildlife-ai-species-service`** (optional): Species classification API used to enrich detections with species labels and scores when the `species` profile is enabled.
+
+How they work together:
+
+1. `ml-service` performs object detection.
+2. `species-service` (optional) adds species-level predictions.
+3. `batch-ui` coordinates workflows and presents results to operators.
+
+The exact detector/species model versions are determined by image tags in `.env` (`ML_SERVICE_IMAGE`, `SPECIES_SERVICE_IMAGE`).
+
+Example flow:
+
+- Upload a camera-trap image from the local web app.
+- `ml-service` returns detections such as `animal` with bounding boxes and confidence scores.
+- If the species profile is enabled, `species-service` adds species labels/scores for detected crops.
+- The UI stores and renders the combined results for review and export.
+
+---
+
 ## Models used
 
 - **Detector model (ml-service):** MegaDetector/YOLO family model for object detection in camera-trap images (animal/person/vehicle style detections with bounding boxes + confidence).
