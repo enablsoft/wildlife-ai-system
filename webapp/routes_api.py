@@ -73,8 +73,9 @@ def register_api_routes(
             video_root = default_video_root
 
         candidate = Path(raw).expanduser()
-        if not candidate.is_absolute():
-            candidate = (video_root / candidate).resolve(strict=False)
+        if candidate.is_absolute():
+            return None, "Folder path must be relative to runtime video folder."
+        candidate = (video_root / candidate).resolve(strict=False)
 
         try:
             resolved = candidate.resolve(strict=True)
@@ -82,7 +83,9 @@ def register_api_routes(
             return None, "Folder not found."
         if not resolved.is_dir():
             return None, "Folder path must be a directory."
-        if resolved != video_root and video_root not in resolved.parents:
+        try:
+            resolved.relative_to(video_root)
+        except ValueError:
             return None, f"Folder must be inside runtime video folder: {video_root}"
         return resolved, None
 
