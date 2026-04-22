@@ -171,6 +171,7 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
   <form id='enqueueFolderForm' onsubmit='return false;'>
     <label>Folder Path (local on this machine)</label>
     <input id='enqueueFolderPath' name='folder_path' value='{video_dir_posix}' />
+    <p class='job-meta' style='margin:6px 0 0 0'>If this folder changes, the app will ask whether to keep default output or set a custom output path.</p>
     <div style='height:8px'></div>
     <label>Include extensions (comma-separated)</label>
     <input id='enqueueExts' name='exts' value='.mp4,.mov,.avi,.mkv,.jpg,.jpeg,.png,.webp' />
@@ -179,13 +180,12 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
     <input id='enqueueFps' type='number' step='0.1' value='1' name='fps' />
     <div style='height:8px'></div>
     <label>ML URL</label>
-    <input name='ml_url' value='http://127.0.0.1:8010' />
+    <input id='enqueueMl' name='ml_url' value='http://127.0.0.1:8010' />
     <div style='height:8px'></div>
     <label>Species URL</label>
     <input id='enqueueSpecies' name='species_url' value='http://127.0.0.1:8100' />
     <div style='height:10px'></div>
     <button class='btn' type='button' id='btnEnqueuePreview' onclick='previewEnqueueFolder()'>Preview &amp; queue</button>
-    <a class='btn btn-subtle js-action' href='/cleanup-output' data-confirm='Delete all run_* output folders under test-media/output? Active job output folders are skipped.'>Cleanup Output Folder</a>
   </form>
 </div>
 <div class='panel' style='margin-top:16px'>
@@ -255,6 +255,33 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
   <div class='jobs'>{''.join(job_items)}</div>
 </div>
 <div id='tabSettings' style='display:none'>
+  <div class='panel' style='margin-top:10px'>
+    <h3 style='margin-top:0'>Data Retention</h3>
+    <p class='job-meta'>Manage retained outputs and job history. Cleanup only removes completed run folders under the configured output path. Active queued/running job output folders are preserved.</p>
+    <div class='actions'>
+      <a class='btn btn-subtle js-action' href='/cleanup-output' data-confirm='Delete all run_* output folders under {output_label}? Active job output folders are skipped.'>Cleanup Output Folder</a>
+      <a class='btn btn-subtle js-action' href='/reset-generated-media' data-confirm='Delete generated/local media files (input, video, and run_* outputs) but keep SQL job history? Active job folders are preserved.'>Reset Generated Media</a>
+      <a class='btn btn-subtle js-action' href='/clear-jobs' data-confirm='Clear all job records from the SQL database? This cannot be undone.'>Clear SQL Job History</a>
+      <a class='btn btn-subtle js-action' href='/reset-all' data-confirm='Reset everything? This will cancel active jobs, clear SQL job history, and delete generated/local media and output files.'>Reset All (Media + SQL History)</a>
+    </div>
+  </div>
+  <div class='panel' style='margin-top:10px'>
+    <h3 style='margin-top:0'>Runtime Paths</h3>
+    <p class='job-meta'>Use these folders for queued media and generated outputs. Changes apply to new work; existing jobs keep their saved output path.</p>
+    <label>Input folder (images + extracted frames)</label>
+    <input id='settingsInputDir' value='{input_label}' />
+    <div style='height:8px'></div>
+    <label>Video folder (uploaded videos)</label>
+    <input id='settingsVideoDir' value='{video_label}' />
+    <div style='height:8px'></div>
+    <label>Output folder (run_* results)</label>
+    <input id='settingsOutputDir' value='{output_label}' />
+    <div style='height:10px'></div>
+    <div class='actions'>
+      <button class='btn' type='button' onclick='saveRuntimeSettings()'>Save Paths</button>
+    </div>
+    <p id='settingsPathMsg' class='job-meta' style='margin-top:10px'></p>
+  </div>
   <div class='panel' style='margin-top:10px'>
     <h3 style='margin-top:0'>Display</h3>
     <p class='job-meta'>One setting for both <b>Frame Results</b> (list + pagination) and <b>Video Frame Browser</b> (frame list + inline preview). Blanks are frames with no species match (label ending in <code>Blank</code> or containing <code>__Blank</code>).</p>
@@ -333,6 +360,7 @@ let ACTIVE_VIDEO = '';
 let ACTIVE_FRAME = '';
 let _confirmResolve = null;
 let _enqueuePreviewState = null;
+let _lastBatchFolderPrompt = '';
 let _tagEditRel = '';
 let _tagEditSpeciesShort = '';
 const ACTIVE_TAG_FILTERS = new Set();
@@ -427,6 +455,7 @@ function esc(s) {{
 }}
 async function previewEnqueueFolder() {{
   const folder = document.getElementById('enqueueFolderPath')?.value || '';
+  if (!(await ensureBatchOutputChoice(folder))) return;
   const exts = document.getElementById('enqueueExts')?.value || '';
   const res = await fetch('/api/enqueue-folder-preview', {{
     method: 'POST',
@@ -654,6 +683,81 @@ async function editManualTag(annotatedRel) {{
     speciesShort = isBlankRecord(rec) ? 'Blank' : (lastTaxonSegment(String(rec.species || '')) || String(rec.species || '').trim());
   }}
   openTagEditModal(rel, current, label, speciesShort);
+}}
+async function ensureBatchOutputChoice(folderPath) {{
+  const folder = String(folderPath || '').trim();
+  if (!folder) return true;
+  const videoEl = document.getElementById('settingsVideoDir');
+  const inputEl = document.getElementById('settingsInputDir');
+  const outputEl = document.getElementById('settingsOutputDir');
+  if (!videoEl || !inputEl || !outputEl) return true;
+  const currentVideo = String(videoEl.value || '').trim();
+  if (!currentVideo || folder.toLowerCase() === currentVideo.toLowerCase()) return true;
+  if (_lastBatchFolderPrompt.toLowerCase() === folder.toLowerCase()) return true;
+
+  const useDefault = window.confirm(
+    `Batch folder changed to:\\n${{folder}}\\n\\nUse default output folder?\\n\\nOK = keep default output (${{outputEl.value || ''}})\\nCancel = set a custom output folder now`
+  );
+  if (useDefault) {{
+    _lastBatchFolderPrompt = folder;
+    return true;
+  }}
+
+  const custom = window.prompt('Enter output folder path for this batch folder:', outputEl.value || '');
+  if (custom === null) return false;
+  const customOut = String(custom || '').trim();
+  if (!customOut) {{
+    await openConfirmModal('Output folder cannot be empty.');
+    return false;
+  }}
+
+  const res = await fetch('/api/settings/runtime', {{
+    method: 'POST',
+    headers: {{ 'Content-Type': 'application/json' }},
+    body: JSON.stringify({{
+      input_dir: inputEl.value || '',
+      video_dir: folder,
+      output_dir: customOut,
+    }}),
+  }});
+  const data = await res.json();
+  if (!data.ok) {{
+    await openConfirmModal(data.error || 'Failed to save output folder.');
+    return false;
+  }}
+  videoEl.value = data.video_dir || folder;
+  outputEl.value = data.output_dir || customOut;
+  _lastBatchFolderPrompt = folder;
+  const msg = document.getElementById('settingsPathMsg');
+  if (msg) msg.textContent = `Saved runtime paths for batch folder: ${{folder}}`;
+  return true;
+}}
+async function saveRuntimeSettings() {{
+  const inputDir = document.getElementById('settingsInputDir')?.value || '';
+  const videoDir = document.getElementById('settingsVideoDir')?.value || '';
+  const outputDir = document.getElementById('settingsOutputDir')?.value || '';
+  const msg = document.getElementById('settingsPathMsg');
+  if (msg) msg.textContent = 'Saving...';
+  try {{
+    const res = await fetch('/api/settings/runtime', {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{
+        input_dir: inputDir,
+        video_dir: videoDir,
+        output_dir: outputDir,
+      }}),
+    }});
+    const data = await res.json();
+    if (!data.ok) {{
+      if (msg) msg.textContent = data.error || 'Failed to save settings.';
+      return;
+    }}
+    if (msg) msg.textContent = 'Saved. Reloading...';
+    window.location.reload();
+  }} catch (_) {{
+    if (msg) msg.textContent = 'Failed to save settings.';
+  }}
 }}
 function attachImageClickHandlers() {{
   document.querySelectorAll('#resultsBody img.thumb').forEach((img) => {{
