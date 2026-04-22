@@ -59,6 +59,22 @@ def register_api_routes(
     export_frames_xlsx: Callable[[list[dict[str, str]], bool], bytes],
 ) -> None:
     """Register API endpoints used by UI actions and exports."""
+
+    def _resolve_batch_folder(raw_folder: str) -> tuple[Path | None, str | None]:
+        raw = (raw_folder or "").strip().strip('"').strip("'")
+        if not raw:
+            return None, "Folder path is required."
+        candidate = Path(raw).expanduser()
+        if not candidate.is_absolute():
+            return None, "Folder path must be an absolute path."
+        try:
+            resolved = candidate.resolve(strict=True)
+        except Exception:
+            return None, "Folder not found."
+        if not resolved.is_dir():
+            return None, "Folder path must be a directory."
+        return resolved, None
+
     @app.post("/api/settings/runtime")
     async def api_settings_runtime(body: RuntimeSettingsIn) -> JSONResponse:
         try:
@@ -66,7 +82,8 @@ def register_api_routes(
             video_dir = validate_runtime_dir(body.video_dir, "Video folder")
             output_dir = validate_runtime_dir(body.output_dir, "Output folder")
         except ValueError as e:
-            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+            logger.warning("settings_runtime_validation_failed error=%s", e)
+            return JSONResponse({"ok": False, "error": "Invalid runtime folder settings."}, status_code=400)
         db.set_control("runtime_input_dir", str(input_dir))
         db.set_control("runtime_video_dir", str(video_dir))
         db.set_control("runtime_output_dir", str(output_dir))
@@ -94,15 +111,15 @@ def register_api_routes(
 
     @app.post("/api/enqueue-folder-preview")
     async def api_enqueue_folder_preview(body: EnqueueFolderPreviewIn) -> JSONResponse:
-        raw = (body.folder_path or "").strip().strip('"').strip("'")
-        p = Path(raw)
-        if not p.is_dir():
-            return JSONResponse({"ok": False, "error": f"Folder not found: {raw}"}, status_code=400)
+        p, folder_err = _resolve_batch_folder(body.folder_path)
+        if folder_err or p is None:
+            return JSONResponse({"ok": False, "error": folder_err or "Invalid folder path."}, status_code=400)
         wanted = parse_exts(body.exts)
         try:
             idx = folder_media_index(p, wanted)
-        except Exception as e:
-            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        except Exception:
+            logger.exception("enqueue_folder_preview_failed folder=%s", p)
+            return JSONResponse({"ok": False, "error": "Unable to enumerate media files for this folder."}, status_code=400)
         items: list[dict[str, Any]] = []
         for norm, (fp, mt) in sorted(idx.items(), key=lambda kv: kv[1][0].name.lower()):
             prior = db.latest_job_for_input(norm, mt)
@@ -117,19 +134,19 @@ def register_api_routes(
                     "prior_job_id": pid,
                 }
             )
-        return JSONResponse({"ok": True, "folder": raw, "items": items})
+        return JSONResponse({"ok": True, "folder": str(p), "items": items})
 
     @app.post("/api/enqueue-folder-commit")
     async def api_enqueue_folder_commit(body: EnqueueFolderCommitIn) -> JSONResponse:
-        raw = (body.folder_path or "").strip().strip('"').strip("'")
-        p = Path(raw)
-        if not p.is_dir():
-            return JSONResponse({"ok": False, "error": f"Folder not found: {raw}"}, status_code=400)
+        p, folder_err = _resolve_batch_folder(body.folder_path)
+        if folder_err or p is None:
+            return JSONResponse({"ok": False, "error": folder_err or "Invalid folder path."}, status_code=400)
         wanted = parse_exts(body.exts)
         try:
             idx = folder_media_index(p, wanted)
-        except Exception as e:
-            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        except Exception:
+            logger.exception("enqueue_folder_commit_failed folder=%s", p)
+            return JSONResponse({"ok": False, "error": "Unable to enumerate media files for this folder."}, status_code=400)
         q = 0
         skipped = 0
         missing = 0
@@ -150,7 +167,7 @@ def register_api_routes(
                 skipped += 1
             else:
                 q += 1
-        logger.info("batch_enqueued_commit count=%s skipped=%s missing=%s folder=%s", q, skipped, missing, raw)
+        logger.info("batch_enqueued_commit count=%s skipped=%s missing=%s folder=%s", q, skipped, missing, p)
         msg = f"Queued {q} file(s), skipped {skipped} active duplicate(s), {missing} path(s) not in folder."
         return JSONResponse({"ok": True, "queued": q, "skipped": skipped, "missing": missing, "message": msg})
 
@@ -164,8 +181,9 @@ def register_api_routes(
             records = [r for r in records if not record_is_blank(r["species"], r["description"])]
         try:
             payload = export_frames_xlsx(records, hide)
-        except RuntimeError as e:
-            return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+        except RuntimeError:
+            logger.exception("export_frame_results_xlsx_failed")
+            return JSONResponse({"ok": False, "error": "Excel export is currently unavailable."}, status_code=500)
         ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         fn = f"wildlife_frame_results_{ts}.xlsx"
         headers = {"Content-Disposition": f'attachment; filename="{fn}"'}

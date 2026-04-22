@@ -47,6 +47,7 @@ def render_home_page_html(
     records_json: str,
 ) -> str:
     """Render the full home page HTML/CSS/JS template from prepared view data."""
+    safe_msg = html.escape(msg or "")
     return f"""<!doctype html>
 <html><head><meta charset='utf-8'/>
 <meta name='viewport' content='width=device-width, initial-scale=1'/>
@@ -153,7 +154,7 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
 </style></head>
 <body><div class='wrap'>
 <div class='top'><div class='title'>Wildlife Processing Console</div><div class='badge'>{'Paused' if paused else 'Running'}</div></div>
-<div class='msg'>{msg}</div>
+<div class='msg'>{safe_msg}</div>
 <div class='row'>
   <div class='panel'>
     <h3 style='margin-top:0'>Queue Control</h3>
