@@ -1,8 +1,13 @@
-# Wildlife AI System (public deploy)
+# Wildlife AI System (Public Deploy)
 
-Deploy **prebuilt container images** for camera-trap style workflows: MegaDetector-style detection, optional species classification, and a batch UI—plus a **local Python web app** for uploads, queues, and annotated previews.
+Run a wildlife-processing stack using **prebuilt Docker images**:
+- MegaDetector-style object detection
+- Optional species classification
+- Batch UI
+- Local Python web app for uploads, queues, and annotated previews
 
-This repository holds **runtime configuration** (Compose, env templates, scripts, and the web app). Application source for the images lives in the upstream build repo; images are published to **GHCR**.
+This repository is deployment-focused. It includes Docker Compose files, environment templates, scripts, and the local web app.
+Container images are pulled from **GHCR** (GitHub Container Registry). Core service source code is maintained in a separate upstream repository.
 
 ---
 

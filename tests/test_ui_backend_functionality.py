@@ -67,6 +67,7 @@ def test_ui_backend_api_endpoints_work(monkeypatch, tmp_path: Path) -> None:
     queued: list[tuple[str, str]] = []
 
     monkeypatch.setattr(app_module.db, "set_control", lambda k, v: controls.__setitem__(k, str(v)))
+    monkeypatch.setattr(app_module.db, "get_control", lambda k, d="": controls.get(k, d))
     monkeypatch.setattr(app_module.db, "list_all_jobs", lambda: [])
     monkeypatch.setattr(app_module.db, "latest_job_for_input", lambda _p, _t: None)
     monkeypatch.setattr(
@@ -79,7 +80,7 @@ def test_ui_backend_api_endpoints_work(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(app_module.db, "upsert_frame_tag", lambda rel, tag: tag_updates.append((rel, tag)))
     monkeypatch.setattr(app_module.db, "remove_frame_tag", lambda rel: tag_updates.append((rel, "")))
 
-    folder = tmp_path / "batch"
+    folder = tmp_path / "vid" / "batch"
     folder.mkdir(parents=True, exist_ok=True)
     image = folder / "demo.jpg"
     image.write_bytes(b"jpg")
