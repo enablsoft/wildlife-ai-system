@@ -9,6 +9,8 @@ Run a wildlife-processing stack using **prebuilt Docker images**:
 This repository is deployment-focused. It includes Docker Compose files, environment templates, scripts, and the local web app.
 Container images are pulled from **GHCR** (GitHub Container Registry). Core service source code is maintained in a separate upstream repository.
 
+![Video frame processing](https://raw.githubusercontent.com/enablsoft/wildlife-ai-system/main/docs/images/video-frame-processing.png)
+
 ---
 
 ## 5-minute setup
@@ -248,8 +250,8 @@ It also auto-stops an existing local `uvicorn webapp.app:app` process on `127.0.
 
 **Screenshots**
 
-![Video frame processing](docs/images/video-frame-processing.png)
 ![Batch process](docs/images/batch_process.png)
+![Video frame processing](docs/images/video-frame-processing.png)
 
 **Webapp log rotation**
 
