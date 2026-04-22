@@ -20,6 +20,9 @@
 
 .PARAMETER Preview
   Print planned commands without executing them.
+
+.PARAMETER Interactive
+  Ask for confirmation before cleanup actions.
 #>
 
 param(
@@ -27,7 +30,8 @@ param(
     [switch]$RemoveImages,
     [switch]$RemoveVolumes,
     [switch]$PruneDangling,
-    [switch]$Preview
+    [switch]$Preview,
+    [switch]$Interactive
 )
 
 $ErrorActionPreference = "Stop"
@@ -41,6 +45,16 @@ if ($RemoveImages) { $args += @("--rmi", "all") }
 if ($RemoveVolumes) { $args += "-v" }
 
 Write-Host "Compose command: docker compose $($args -join ' ')"
+if ($PruneDangling) {
+    Write-Host "Note: -PruneDangling runs a global dangling-image prune (not limited to this project)."
+}
+if ($Interactive -and -not $Preview) {
+    $answer = Read-Host "Proceed with cleanup command(s)? [y/N]"
+    if ($answer.Trim().ToLower() -notin @("y", "yes")) {
+        Write-Host "Cancelled."
+        exit 0
+    }
+}
 if (-not $Preview) {
     docker compose @args
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

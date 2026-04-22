@@ -12,6 +12,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -24,7 +25,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Set up Python 3.10
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.10"
           cache: pip
@@ -33,13 +34,13 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install flake8 pytest httpx
-          pip install -r requirements-webapp.txt
+          python -m pip install flake8 pytest httpx
+          python -m pip install -r requirements-webapp.txt
 
       - name: Lint with flake8
         run: |
-          flake8 webapp tests --count --select=E9,F63,F7,F82 --show-source --statistics
-          flake8 webapp tests --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+          python -m flake8 webapp tests --count --select=E9,F63,F7,F82 --show-source --statistics
+          python -m flake8 webapp tests --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
 
       - name: Test with pytest
-        run: pytest -q
+        run: python -m pytest -q

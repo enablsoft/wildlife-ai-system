@@ -18,13 +18,17 @@
 
 .PARAMETER DatabaseName
   Mongo mode only: override MONGO_DB_NAME.
+
+.PARAMETER Interactive
+  Ask for confirmation before running backup.
 #>
 
 param(
     [switch]$IncludeMedia,
     [switch]$Zip,
     [string]$MongoUri = "",
-    [string]$DatabaseName = ""
+    [string]$DatabaseName = "",
+    [switch]$Interactive
 )
 
 $ErrorActionPreference = "Stop"
@@ -55,6 +59,14 @@ function Get-EnvValue {
 $backend = (Get-EnvValue -Key "DB_BACKEND" -DefaultValue "sqlite").Trim().ToLower()
 if (-not $backend) {
     $backend = "sqlite"
+}
+
+if ($Interactive) {
+    $answer = Read-Host "Proceed with backup for DB_BACKEND=$backend? [y/N]"
+    if ($answer.Trim().ToLower() -notin @("y", "yes")) {
+        Write-Host "Cancelled."
+        exit 0
+    }
 }
 
 if ($backend -eq "mongo") {

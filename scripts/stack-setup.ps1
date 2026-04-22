@@ -11,11 +11,15 @@
 
 .PARAMETER Pull
   Pull images before starting containers.
+
+.PARAMETER Interactive
+  Ask for confirmation before pulling/starting.
 #>
 
 param(
     [switch]$Species,
-    [switch]$Pull
+    [switch]$Pull,
+    [switch]$Interactive
 )
 
 $ErrorActionPreference = "Stop"
@@ -29,6 +33,16 @@ if (-not (Test-Path ".env")) {
 
 foreach ($k in @("ML_SERVICE_IMAGE", "BATCH_UI_IMAGE", "SPECIES_SERVICE_IMAGE")) {
     Remove-Item "Env:$k" -ErrorAction SilentlyContinue
+}
+
+if ($Interactive) {
+    $scope = if ($Species) { "with species profile" } else { "core services only" }
+    $plan = if ($Pull) { "pull images and start stack" } else { "start stack" }
+    $answer = Read-Host "Proceed to $plan ($scope)? [y/N]"
+    if ($answer.Trim().ToLower() -notin @("y", "yes")) {
+        Write-Host "Cancelled."
+        exit 0
+    }
 }
 
 if ($Pull) {

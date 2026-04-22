@@ -164,10 +164,12 @@ Use helper scripts for common Docker lifecycle actions:
 # Setup/start (optionally pull first)
 .\scripts\stack-setup.ps1 -Pull
 .\scripts\stack-setup.ps1 -Pull -Species
+.\scripts\stack-setup.ps1 -Pull -Species -Interactive
 
 # Cleanup/stop
 .\scripts\stack-cleanup.ps1
 .\scripts\stack-cleanup.ps1 -Species
+.\scripts\stack-cleanup.ps1 -Species -Interactive
 
 # Deep cleanup (containers + compose images + volumes + dangling images)
 .\scripts\stack-cleanup.ps1 -Species -RemoveImages -RemoveVolumes -PruneDangling
@@ -175,6 +177,9 @@ Use helper scripts for common Docker lifecycle actions:
 # Preview cleanup commands only (no changes)
 .\scripts\stack-cleanup.ps1 -Species -RemoveImages -RemoveVolumes -PruneDangling -Preview
 ```
+
+Note: `stack-cleanup.ps1` is project-scoped for compose resources.  
+Only `-PruneDangling` applies globally, and only to dangling images.
 
 ---
 
