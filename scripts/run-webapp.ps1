@@ -27,7 +27,25 @@ function Ensure-Ffmpeg {
     }
 }
 
+function Stop-ExistingWebapp {
+    # Prevent "address already in use" by stopping prior local wildlife webapp uvicorn.
+    $candidates = Get-CimInstance Win32_Process | Where-Object {
+        ($_.CommandLine -like "*uvicorn webapp.app:app*") -and
+        ($_.CommandLine -like "*--host 127.0.0.1*") -and
+        ($_.CommandLine -like "*--port 8110*")
+    }
+    foreach ($p in $candidates) {
+        try {
+            Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop
+            Write-Host "Stopped existing webapp process PID $($p.ProcessId)."
+        } catch {
+            Write-Host "Could not stop existing webapp process PID $($p.ProcessId): $($_.Exception.Message)"
+        }
+    }
+}
+
 # --- Dependencies + app launch ---
 Ensure-Ffmpeg
+Stop-ExistingWebapp
 python -m pip install -r requirements-webapp.txt
 python -m uvicorn webapp.app:app --host 127.0.0.1 --port 8110
