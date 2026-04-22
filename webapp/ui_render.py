@@ -60,6 +60,7 @@ body{{font-family:Inter,Segoe UI,Arial,sans-serif;background:#f6f8fb;color:#1e29
 label{{font-size:13px;font-weight:600;color:#334155}}
 input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-sizing:border-box}}
 .btn{{display:inline-block;padding:9px 12px;border-radius:8px;background:#0f172a;color:white;text-decoration:none;border:0;cursor:pointer}}
+.btn-compact{{padding:6px 10px;font-size:13px}}
 .btn-subtle{{background:#334155}}
 .actions{{display:flex;flex-wrap:wrap;gap:8px;align-items:center}}
 .actions a{{margin-right:0}}
@@ -85,6 +86,11 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
 .result-card{{display:grid;grid-template-columns:240px 1fr;gap:12px;align-items:start;padding:10px;border:1px solid #e2e8f0;border-radius:10px;background:#fff}}
 .result-text{{display:grid;gap:5px;font-size:13px}}
 .desc-col{{max-width:100%;color:#334155}}
+.tag-list{{display:flex;flex-wrap:wrap;gap:6px;margin-top:2px}}
+.tag-chip{{display:inline-block;padding:2px 8px;border:1px solid #c7d2fe;border-radius:999px;background:#eef2ff;color:#3730a3;font-size:12px}}
+.tag-chip.default{{border-color:#bbf7d0;background:#dcfce7;color:#166534}}
+.tag-chip-filter{{cursor:pointer;user-select:none}}
+.tag-chip-filter.active{{background:#3730a3;color:#fff;border-color:#3730a3}}
 .browser-row{{display:grid;grid-template-columns:minmax(0,280px) minmax(0,1fr) minmax(0,1fr);gap:12px;align-items:start}}
 .browser-row > div{{min-width:0}}
 .video-list{{max-height:340px;overflow:auto;border:1px solid #e2e8f0;border-radius:8px;padding:8px;background:#fff;box-sizing:border-box}}
@@ -231,6 +237,12 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
     <label>Search by species, video, frame, or description</label>
     <input id='resultsSearch' placeholder='e.g. hedgehog, IMG_0406, frame_0003, blank' oninput='filterResults()' />
     <div style='height:8px'></div>
+    <div class='actions' style='align-items:center'>
+      <div id='resultsTagFilters' class='tag-list'></div>
+      <span id='resultsTagFilterCount' class='job-meta'>0 tags active</span>
+      <button class='btn btn-subtle btn-compact' type='button' onclick='clearTagFilters()'>Clear tag filters</button>
+    </div>
+    <div style='height:8px'></div>
     <div class='actions'>{''.join(pagination_bits)}</div>
     <div style='height:10px'></div>
     <div id='resultsBody' class='results-list'>
@@ -276,6 +288,24 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
     </div>
   </div>
 </div>
+<div id='tagEditModal' class='app-modal' role='dialog' aria-modal='true'>
+  <div class='app-modal-backdrop' id='tagEditBackdrop'></div>
+  <div class='app-modal-box' style='max-width:min(560px,94vw)'>
+    <div class='app-modal-title'>Edit manual tag</div>
+    <div class='app-modal-body'>
+      <div class='job-meta' id='tagEditFrameLabel' style='margin-bottom:8px'></div>
+      <label>Manual tag</label>
+      <input id='tagEditInput' placeholder='e.g. deer crossing trail' />
+      <p class='job-meta' style='margin-top:8px'>Use commas for multiple tags (example: <code>trail-cam, night, fox</code>). Leave empty and save to clear tags.</p>
+    </div>
+    <div class='app-modal-actions'>
+      <button type='button' class='btn btn-subtle' id='tagEditCancel'>Cancel</button>
+      <button type='button' class='btn btn-subtle' id='tagEditUseSpecies'>Use Species Short Name</button>
+      <button type='button' class='btn btn-subtle' id='tagEditClear'>Clear</button>
+      <button type='button' class='btn' id='tagEditSave'>Save</button>
+    </div>
+  </div>
+</div>
 <div id='viewerOverlay' class='viewer-overlay'>
   <div class='viewer-box'>
     <div class='viewer-top'>
@@ -303,6 +333,9 @@ let ACTIVE_VIDEO = '';
 let ACTIVE_FRAME = '';
 let _confirmResolve = null;
 let _enqueuePreviewState = null;
+let _tagEditRel = '';
+let _tagEditSpeciesShort = '';
+const ACTIVE_TAG_FILTERS = new Set();
 function lastTaxonSegment(species) {{
   const parts = String(species || '').split(';').map((p) => p.trim());
   for (let i = parts.length - 1; i >= 0; i--) {{
@@ -340,6 +373,54 @@ function closeConfirmModal(ok) {{
 function closeEnqueuePreview() {{
   document.getElementById('enqueuePreviewModal')?.classList.remove('show');
   _enqueuePreviewState = null;
+}}
+function openTagEditModal(rel, currentTag, labelText, speciesShort) {{
+  _tagEditRel = rel;
+  _tagEditSpeciesShort = String(speciesShort || '').trim();
+  const modal = document.getElementById('tagEditModal');
+  const inp = document.getElementById('tagEditInput');
+  const lbl = document.getElementById('tagEditFrameLabel');
+  if (inp) inp.value = currentTag || '';
+  if (lbl) lbl.textContent = labelText || rel || '';
+  modal?.classList.add('show');
+  setTimeout(() => inp?.focus(), 0);
+}}
+function closeTagEditModal() {{
+  document.getElementById('tagEditModal')?.classList.remove('show');
+  _tagEditRel = '';
+  _tagEditSpeciesShort = '';
+}}
+function normalizeTagsCsv(raw) {{
+  const parts = String(raw || '')
+    .split(',')
+    .map((x) => x.trim())
+    .filter((x) => !!x);
+  const seen = new Set();
+  const out = [];
+  for (const t of parts) {{
+    const k = t.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(t);
+  }}
+  return out.join(', ');
+}}
+async function saveTagEditValue(nextValue) {{
+  const rel = String(_tagEditRel || '').trim();
+  if (!rel) return;
+  const normalized = normalizeTagsCsv(nextValue);
+  const res = await fetch('/api/frame-tag', {{
+    method: 'POST',
+    headers: {{ 'Content-Type': 'application/json' }},
+    body: JSON.stringify({{ annotated_rel: rel, tag_text: normalized }}),
+  }});
+  const data = await res.json();
+  if (!data.ok) {{
+    await openConfirmModal(data.error || 'Failed to save manual tag.');
+    return;
+  }}
+  closeTagEditModal();
+  window.location.reload();
 }}
 function esc(s) {{
   return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;');
@@ -444,6 +525,31 @@ async function commitEnqueuePreview() {{
   document.getElementById('appConfirmBackdrop')?.addEventListener('click', () => closeConfirmModal(false));
   document.getElementById('enqueuePreviewCancel')?.addEventListener('click', () => closeEnqueuePreview());
   document.getElementById('enqueuePreviewBackdrop')?.addEventListener('click', () => closeEnqueuePreview());
+  document.getElementById('enqueuePreviewOk')?.addEventListener('click', async () => commitEnqueuePreview());
+  document.getElementById('tagEditCancel')?.addEventListener('click', () => closeTagEditModal());
+  document.getElementById('tagEditBackdrop')?.addEventListener('click', () => closeTagEditModal());
+  document.getElementById('tagEditClear')?.addEventListener('click', async () => saveTagEditValue(''));
+  document.getElementById('tagEditUseSpecies')?.addEventListener('click', () => {{
+    if (!_tagEditSpeciesShort) return;
+    const inp = document.getElementById('tagEditInput');
+    const current = inp?.value || '';
+    const merged = normalizeTagsCsv((current ? `${{current}}, ` : '') + _tagEditSpeciesShort);
+    if (inp) inp.value = merged;
+  }});
+  document.getElementById('tagEditSave')?.addEventListener('click', async () => {{
+    const v = document.getElementById('tagEditInput')?.value || '';
+    await saveTagEditValue(v);
+  }});
+  document.getElementById('tagEditInput')?.addEventListener('keydown', async (e) => {{
+    if (e.key === 'Enter') {{
+      e.preventDefault();
+      const v = document.getElementById('tagEditInput')?.value || '';
+      await saveTagEditValue(v);
+    }} else if (e.key === 'Escape') {{
+      e.preventDefault();
+      closeTagEditModal();
+    }}
+  }});
 }})();
 window.addEventListener('beforeunload', () => {{
   sessionStorage.setItem(SCROLL_KEY, String(window.scrollY || 0));
@@ -536,6 +642,18 @@ async function previewExcelExport() {{
   const u = new URL('/export/frame-results.xlsx', window.location.origin);
   u.searchParams.set('hide_blanks', hideBlanks ? '1' : '0');
   window.location.href = u.toString();
+}}
+async function editManualTag(annotatedRel) {{
+  const rel = String(annotatedRel || '').trim();
+  if (!rel) return;
+  const rec = FRAME_RECORDS.find((r) => String(r.annotated_rel || '') === rel);
+  const current = String((rec && rec.manual_tag) || '');
+  const label = rec ? `${{rec.source || ''}} :: ${{rec.frame || ''}}` : rel;
+  let speciesShort = '';
+  if (rec) {{
+    speciesShort = isBlankRecord(rec) ? 'Blank' : (lastTaxonSegment(String(rec.species || '')) || String(rec.species || '').trim());
+  }}
+  openTagEditModal(rel, current, label, speciesShort);
 }}
 function attachImageClickHandlers() {{
   document.querySelectorAll('#resultsBody img.thumb').forEach((img) => {{
@@ -674,11 +792,71 @@ function filterResults(){{
   const rows = document.querySelectorAll('.result-row');
   rows.forEach((row)=>{{
     const text = (row.getAttribute('data-search') || '').toLowerCase();
+    const tagsCsv = (row.getAttribute('data-tags') || '').toLowerCase();
+    const rowTags = new Set(tagsCsv.split(',').map((x) => x.trim()).filter((x) => !!x));
     const matchQ = !q || text.includes(q);
-    row.style.display = matchQ ? '' : 'none';
+    let matchTags = true;
+    if (ACTIVE_TAG_FILTERS.size > 0) {{
+      for (const t of ACTIVE_TAG_FILTERS) {{
+        if (!rowTags.has(t)) {{
+          matchTags = false;
+          break;
+        }}
+      }}
+    }}
+    row.style.display = (matchQ && matchTags) ? '' : 'none';
   }});
 }}
+function clearTagFilters() {{
+  ACTIVE_TAG_FILTERS.clear();
+  renderTagFilterChips();
+  filterResults();
+}}
+function renderTagFilterChips() {{
+  const box = document.getElementById('resultsTagFilters');
+  const counter = document.getElementById('resultsTagFilterCount');
+  if (!box) return;
+  const map = new Map();
+  FRAME_RECORDS.forEach((r) => {{
+    const bits = []
+      .concat(String(r.species_short || '').split(','))
+      .concat(String(r.species_type || '').split(','))
+      .concat(String(r.manual_tag || '').split(','))
+      .map((x) => x.trim())
+      .filter((x) => !!x);
+    bits.forEach((t) => {{
+      const key = t.toLowerCase();
+      if (!map.has(key)) map.set(key, t);
+    }});
+  }});
+  const tags = Array.from(map.keys()).sort((a, b) => a.localeCompare(b));
+  if (tags.length === 0) {{
+    box.innerHTML = "<span class='job-meta'>No tags yet</span>";
+    if (counter) counter.textContent = '0 tags active';
+    return;
+  }}
+  box.innerHTML = tags.map((k) => {{
+    const label = esc(map.get(k) || k);
+    const active = ACTIVE_TAG_FILTERS.has(k) ? ' active' : '';
+    return `<button class='tag-chip tag-chip-filter${{active}}' type='button' data-tag='${{esc(k)}}'>${{label}}</button>`;
+  }}).join('');
+  box.querySelectorAll('.tag-chip-filter').forEach((btn) => {{
+    btn.addEventListener('click', () => {{
+      const k = String(btn.getAttribute('data-tag') || '').toLowerCase().trim();
+      if (!k) return;
+      if (ACTIVE_TAG_FILTERS.has(k)) ACTIVE_TAG_FILTERS.delete(k);
+      else ACTIVE_TAG_FILTERS.add(k);
+      renderTagFilterChips();
+      filterResults();
+    }});
+  }});
+  if (counter) {{
+    const n = ACTIVE_TAG_FILTERS.size;
+    counter.textContent = `${{n}} tag${{n === 1 ? '' : 's'}} active`;
+  }}
+}}
 attachImageClickHandlers();
+renderTagFilterChips();
 renderVideoBrowser();
 setTimeout(() => {{
   const picker = document.getElementById('multiFiles');

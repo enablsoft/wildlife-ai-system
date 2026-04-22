@@ -179,6 +179,21 @@ A **FastAPI** app in `webapp/` provides a browser UI for local processing (uploa
 
 `run-webapp.ps1` installs Python dependencies into your environment and may attempt **ffmpeg** via `winget` on Windows if missing.
 
+**Webapp log rotation**
+
+- Logs are written to `logs/webapp.log`.
+- Rotation is time-based (`TimedRotatingFileHandler`) and configurable via `.env`:
+  - `LOG_ROTATE_WHEN` (default `midnight`)
+  - `LOG_ROTATE_INTERVAL` (default `1`)
+  - `LOG_BACKUP_DAYS` (default `14`)
+- Example: hourly rotation with 48 backups:
+
+  ```dotenv
+  LOG_ROTATE_WHEN=H
+  LOG_ROTATE_INTERVAL=1
+  LOG_BACKUP_DAYS=48
+  ```
+
 **Batch folder flow**
 
 1. Use **Batch queue from folder** with a local path and file extensions.  

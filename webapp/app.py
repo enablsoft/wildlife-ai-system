@@ -54,11 +54,21 @@ logger = logging.getLogger("wildlife_webapp")
 if not logger.handlers:
     level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
+    rotate_when = (os.environ.get("LOG_ROTATE_WHEN") or "midnight").strip() or "midnight"
+    try:
+        rotate_interval = max(1, int(os.environ.get("LOG_ROTATE_INTERVAL", "1")))
+    except ValueError:
+        rotate_interval = 1
+    try:
+        backup_days = max(1, int(os.environ.get("LOG_BACKUP_DAYS", "14")))
+    except ValueError:
+        backup_days = 14
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    rotating = logging.handlers.RotatingFileHandler(
+    rotating = logging.handlers.TimedRotatingFileHandler(
         LOG_FILE,
-        maxBytes=5_000_000,
-        backupCount=5,
+        when=rotate_when,
+        interval=rotate_interval,
+        backupCount=backup_days,
         encoding="utf-8",
     )
     stream = logging.StreamHandler()
