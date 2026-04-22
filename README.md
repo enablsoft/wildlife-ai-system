@@ -218,8 +218,9 @@ A **FastAPI** app in `webapp/` provides a browser UI for local processing (uploa
 - Call detector and species services; save JSON and annotated images under `test-media/output/run_<timestamp>/`  
 - Job queue, run history, pause/resume, retry/cancel  
 - Frame results with search and pagination; **Video / source summary** table  
-- **Settings** tab: single control for hiding blank/no-match frames (applies to frame list and video frame browser)  
+- **Settings** tab: hide blanks + species label mode (short / latin / full taxonomy)  
 - Batch enqueue from a folder path; output browser and **Open folder** (OS) for completed jobs  
+- Excel export preview supports 5/10/20 row sample and includes latin + taxonomy columns before download
 
 **Run**
 
@@ -238,6 +239,7 @@ A **FastAPI** app in `webapp/` provides a browser UI for local processing (uploa
 3. Open **http://127.0.0.1:8110** (localhost-only bind by default).
 
 `run-webapp.ps1` installs Python dependencies into your environment and may attempt **ffmpeg** via `winget` on Windows if missing.
+It also auto-stops an existing local `uvicorn webapp.app:app` process on `127.0.0.1:8110` before starting, so reruns do not fail with port-in-use errors.
 
 **Webapp log rotation**
 
@@ -269,6 +271,7 @@ A **FastAPI** app in `webapp/` provides a browser UI for local processing (uploa
 
 - Restart `.\scripts\run-webapp.ps1` after changing backend settings.
 - Mongo mode keeps media/output files on disk as before; only metadata storage changes.
+- Safety behavior: if `DB_BACKEND=mongo` is set but Mongo is unavailable/unreachable at startup, the app falls back to SQLite and continues to run.
 
 **Batch folder flow**
 

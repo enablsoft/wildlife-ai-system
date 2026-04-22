@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -353,9 +354,20 @@ def create_jobs_db(sqlite_path: Path) -> Any:
     """Create DB backend instance from environment configuration."""
     backend = (os.environ.get("DB_BACKEND") or "sqlite").strip().lower()
     if backend == "mongo":
-        from webapp.jobs_db_mongo import MongoJobsDb
-
         mongo_uri = (os.environ.get("MONGO_URI") or "mongodb://127.0.0.1:27017").strip()
         mongo_db = (os.environ.get("MONGO_DB_NAME") or "wildlife_webapp").strip() or "wildlife_webapp"
-        return MongoJobsDb(mongo_uri=mongo_uri, database_name=mongo_db)
+        try:
+            from webapp.jobs_db_mongo import MongoJobsDb
+
+            db = MongoJobsDb(mongo_uri=mongo_uri, database_name=mongo_db)
+            db.client.admin.command("ping")
+            return db
+        except Exception as e:
+            warnings.warn(
+                "DB_BACKEND=mongo requested but MongoDB is unavailable; "
+                "falling back to SQLite. "
+                f"Reason: {e}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
     return JobsDb(sqlite_path)

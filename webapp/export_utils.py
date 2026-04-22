@@ -77,9 +77,10 @@ def export_frames_xlsx(
             "video_source",
             "frame",
             "species_label_short",
+            "species_label_latin",
             "default_species_short",
             "default_species_type",
-            "species_raw",
+            "species_taxonomy_full",
             "manual_tag",
             "description",
             "annotated_rel",
@@ -92,6 +93,7 @@ def export_frames_xlsx(
                 r.get("source", ""),
                 r.get("frame", ""),
                 short_species_label(r.get("species", ""), r.get("description", "")),
+                r.get("species_latin", ""),
                 r.get("species_short", ""),
                 r.get("species_type", ""),
                 r.get("species", ""),
@@ -101,7 +103,7 @@ def export_frames_xlsx(
             ]
         )
     ws.freeze_panes = "A2"
-    ws.auto_filter.ref = f"A1:J{max(2, len(records) + 1)}"
+    ws.auto_filter.ref = f"A1:K{max(2, len(records) + 1)}"
     meta = wb.create_sheet("meta")
     meta.append(["generated_at_utc", datetime.utcnow().isoformat()])
     meta.append(["hide_blanks", "1" if hide_blanks else "0"])

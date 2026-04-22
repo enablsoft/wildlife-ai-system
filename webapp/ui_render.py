@@ -790,24 +790,26 @@ async function previewExcelExport() {{
   const sample = rows.slice(0, previewCount);
   const tableRows = sample.map((r) => {{
     const species = esc(formatSpeciesLabel(r));
+    const latin = esc(String(r.species_latin || latinSpeciesName(r.species || '') || ''));
+    const taxonomy = esc(String(r.species || ''));
     const shortTag = esc(String(r.species_short || ''));
     const typeTag = esc(String(r.species_type || ''));
     const manual = esc(String(r.manual_tag || ''));
-    return `<tr><td>${{esc(String(r.source || ''))}}</td><td>${{esc(String(r.frame || ''))}}</td><td>${{species}}</td><td>${{shortTag}}</td><td>${{typeTag}}</td><td>${{manual}}</td></tr>`;
+    return `<tr><td>${{esc(String(r.source || ''))}}</td><td>${{esc(String(r.frame || ''))}}</td><td>${{species}}</td><td>${{latin}}</td><td>${{taxonomy}}</td><td>${{shortTag}}</td><td>${{typeTag}}</td><td>${{manual}}</td></tr>`;
   }}).join('');
   const summary = document.getElementById('exportPreviewSummary');
   if (summary) {{
-    summary.textContent = `Rows to export: ${{rows.length}}\\n${{mode}}\\nColumns include: default_species_short, default_species_type, manual_tag\\nPreview shown: first ${{sample.length}} row(s) (setting: ${{previewCount}}).`;
+    summary.textContent = `Rows to export: ${{rows.length}}\\n${{mode}}\\nColumns include: species_label_latin, species_taxonomy_full, default_species_short, default_species_type, manual_tag\\nPreview shown: first ${{sample.length}} row(s) (setting: ${{previewCount}}).`;
   }}
   const tableWrap = document.getElementById('exportPreviewTableWrap');
   if (tableWrap) {{
     tableWrap.innerHTML = `
       <table class="preview-table">
         <thead>
-          <tr><th>Video</th><th>Frame</th><th>Species</th><th>Default Short</th><th>Default Type</th><th>Manual Tag</th></tr>
+          <tr><th>Video</th><th>Frame</th><th>Species</th><th>Latin</th><th>Taxonomy</th><th>Default Short</th><th>Default Type</th><th>Manual Tag</th></tr>
         </thead>
         <tbody>
-          ${{tableRows || "<tr><td colspan='6'>No rows available with current filters.</td></tr>"}}
+          ${{tableRows || "<tr><td colspan='8'>No rows available with current filters.</td></tr>"}}
         </tbody>
       </table>
     `;
