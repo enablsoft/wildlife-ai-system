@@ -7,8 +7,8 @@ Function index:
 - register_api_routes: register all `/api/*` and `/export/*` endpoints.
 """
 
-from datetime import datetime
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -73,9 +73,26 @@ def register_api_routes(
         except Exception:
             video_root = default_video_root
 
-        candidate = Path(raw).expanduser()
-        if not candidate.is_absolute():
-            candidate = (video_root / candidate).resolve(strict=False)
+        # Normalize user input to a safe relative path rooted at runtime video folder.
+        expanded = os.path.expanduser(raw)
+        normalized_input = os.path.normpath(expanded)
+        video_root_norm = os.path.normpath(str(video_root))
+
+        if os.path.isabs(normalized_input):
+            try:
+                within_video_root = os.path.commonpath([normalized_input, video_root_norm]) == video_root_norm
+            except ValueError:
+                within_video_root = False
+            if not within_video_root:
+                return None, f"Folder must be inside runtime video folder: {video_root}"
+            relative_input = os.path.relpath(normalized_input, video_root_norm)
+        else:
+            relative_input = normalized_input
+
+        parts = [p for p in relative_input.replace("\\", "/").split("/") if p not in ("", ".")]
+        if any(p == ".." for p in parts):
+            return None, "Folder path cannot navigate outside runtime video folder."
+        candidate = video_root.joinpath(*parts).resolve(strict=False)
 
         try:
             resolved = candidate.resolve(strict=True)
