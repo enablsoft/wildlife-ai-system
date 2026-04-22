@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -346,3 +347,15 @@ class JobsDb:
         with self._connect() as c:
             rows = c.execute("SELECT annotated_rel, tag_text FROM frame_tags").fetchall()
             return {str(r["annotated_rel"]): str(r["tag_text"]) for r in rows}
+
+
+def create_jobs_db(sqlite_path: Path) -> Any:
+    """Create DB backend instance from environment configuration."""
+    backend = (os.environ.get("DB_BACKEND") or "sqlite").strip().lower()
+    if backend == "mongo":
+        from webapp.jobs_db_mongo import MongoJobsDb
+
+        mongo_uri = (os.environ.get("MONGO_URI") or "mongodb://127.0.0.1:27017").strip()
+        mongo_db = (os.environ.get("MONGO_DB_NAME") or "wildlife_webapp").strip() or "wildlife_webapp"
+        return MongoJobsDb(mongo_uri=mongo_uri, database_name=mongo_db)
+    return JobsDb(sqlite_path)

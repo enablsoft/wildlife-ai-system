@@ -34,7 +34,7 @@ from webapp.export_utils import (
     format_species_display,
     record_is_blank,
 )
-from webapp.jobs_db import JobsDb
+from webapp.jobs_db import create_jobs_db
 from webapp.pipeline import SUPPORTED_IMAGES, SUPPORTED_VIDEOS, extract_frames, process_images
 from webapp.routes_api import register_api_routes
 from webapp.runtime_paths import runtime_dirs, validate_runtime_dir
@@ -48,7 +48,7 @@ LOG_FILE = LOG_DIR / "webapp.log"
 
 app = FastAPI(title="Wildlife Media Processor", version="0.2.0")
 app.mount("/files", StaticFiles(directory=str(ROOT)), name="files")
-db = JobsDb(DB_PATH)
+db = create_jobs_db(DB_PATH)
 _stop_worker = False
 logger = logging.getLogger("wildlife_webapp")
 if not logger.handlers:

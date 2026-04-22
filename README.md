@@ -229,6 +229,22 @@ A **FastAPI** app in `webapp/` provides a browser UI for local processing (uploa
   LOG_BACKUP_DAYS=48
   ```
 
+**Database backend (SQLite or MongoDB)**
+
+- Default backend is SQLite (`data/webapp_jobs.sqlite`).
+- To use MongoDB for job/control/tag storage, set in `.env`:
+
+  ```dotenv
+  DB_BACKEND=mongo
+  MONGO_URI=mongodb://127.0.0.1:27017
+  MONGO_DB_NAME=wildlife_webapp
+  ```
+
+- Optional for tests: `MONGO_URI_TEST` can point smoke tests to a dedicated Mongo instance (otherwise tests use `MONGO_URI`).
+
+- Restart `.\scripts\run-webapp.ps1` after changing backend settings.
+- Mongo mode keeps media/output files on disk as before; only metadata storage changes.
+
 **Batch folder flow**
 
 1. Use **Batch queue from folder** with a local path and file extensions.  
@@ -247,3 +263,159 @@ A **FastAPI** app in `webapp/` provides a browser UI for local processing (uploa
 | `.\scripts\test-video.ps1` | Extract frames from a video in `test-media/video/` into `test-media/input/`, then run `test-local.ps1` |
 
 Supported image types: `.jpg`, `.jpeg`, `.png`, `.webp`. Video: `.mp4`, `.mov`, `.avi`, `.mkv`.
+
+---
+
+## Backups and restore
+
+One-command wrappers (auto-select by `DB_BACKEND`):
+
+```powershell
+.\scripts\backup.ps1
+.\scripts\restore.ps1 -BackupPath "<path-to-backup>"
+```
+
+Wrappers print guard warnings when flags are used with the wrong backend mode.
+
+### SQLite mode (`DB_BACKEND=sqlite`)
+
+Create a timestamped backup zip:
+
+```powershell
+.\scripts\backup-all.ps1
+```
+
+Includes (when present):
+
+- `data/webapp_jobs.sqlite`
+- `logs/`
+
+Optional media data:
+
+```powershell
+.\scripts\backup-all.ps1 -IncludeMedia
+```
+
+Restore from a backup archive:
+
+```powershell
+.\scripts\restore-all.ps1 -ArchivePath ".\backups\wildlife_backup_YYYYMMDD_HHMMSS.zip"
+```
+
+Use `-Force` to overwrite existing `data/`, `logs/`, or `test-media/*` targets.
+
+### Mongo mode (`DB_BACKEND=mongo`)
+
+Create a Mongo metadata backup using MongoDB Database Tools:
+
+```powershell
+.\scripts\backup-mongo.ps1
+```
+
+Create as zip:
+
+```powershell
+.\scripts\backup-mongo.ps1 -Zip
+```
+
+Restore Mongo metadata:
+
+```powershell
+.\scripts\restore-mongo.ps1 -BackupPath ".\backups\mongo_dump_wildlife_webapp_YYYYMMDD_HHMMSS.zip"
+```
+
+By default restore uses `--drop` (replace existing collections). Use `-NoDrop` to keep existing documents.
+
+---
+
+## SQLite -> Mongo cutover checklist
+
+Use this when moving existing runtime metadata from SQLite to Mongo.
+
+1. **Back up current SQLite data**
+
+   ```powershell
+   .\scripts\backup.ps1 -IncludeMedia
+   ```
+
+2. **Run backend preflight checks**
+
+   ```powershell
+   # Check current backend from .env
+   .\scripts\check-db-backend.ps1
+
+   # Check Mongo target explicitly
+   .\scripts\check-db-backend.ps1 -Backend mongo
+   ```
+
+3. **Run dry-run migration summary**
+
+   ```powershell
+   .\scripts\migrate-sqlite-to-mongo.ps1 -DryRun
+   ```
+
+   If `.env` currently has `DB_BACKEND=mongo`, migration is blocked by default to avoid accidental live writes.  
+   Use `-AllowWhileMongoActive` only when you intentionally need to bypass this guard.
+
+4. **Run migration**
+
+   ```powershell
+   .\scripts\migrate-sqlite-to-mongo.ps1
+   ```
+
+5. **Switch runtime backend**
+
+   ```dotenv
+   DB_BACKEND=mongo
+   MONGO_URI=mongodb://127.0.0.1:27017
+   MONGO_DB_NAME=wildlife_webapp
+   ```
+
+6. **Restart webapp and verify**
+
+   ```powershell
+   .\scripts\run-webapp.ps1
+   .\scripts\check-db-backend.ps1 -Backend mongo
+   ```
+
+### Rollback checklist
+
+1. Set `DB_BACKEND=sqlite` in `.env`.
+2. Restart webapp (`.\scripts\run-webapp.ps1`).
+3. If needed, restore latest SQLite backup:
+
+   ```powershell
+   .\scripts\restore.ps1 -BackupPath ".\backups\wildlife_backup_YYYYMMDD_HHMMSS.zip" -Force
+   ```
+
+4. Confirm sqlite checks:
+
+   ```powershell
+   .\scripts\check-db-backend.ps1 -Backend sqlite
+   ```
+
+---
+
+## Backend smoke tests
+
+Run backend smoke tests with one command:
+
+```powershell
+.\scripts\test-backends.ps1
+```
+
+---
+
+## Environment preflight
+
+Check required `.env` keys before running app/tests:
+
+```powershell
+.\scripts\check-env.ps1
+```
+
+Include Mongo requirements too:
+
+```powershell
+.\scripts\check-env.ps1 -ForMongo
+```
