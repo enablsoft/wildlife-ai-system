@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import html
+
 """
 UI render helpers for the webapp.
 
@@ -11,10 +13,12 @@ Function index:
 
 def render_output_browser_page(job_id: int, rel_dir: str, rows_html: str) -> str:
     """Render the output browser page for a specific run."""
+    safe_job_id = html.escape(str(job_id))
+    safe_rel_dir = html.escape(rel_dir)
     return (
         "<!doctype html><html><body style='font-family:Arial,sans-serif;max-width:980px;margin:20px auto'>"
-        f"<h3>Output Browser - Job #{job_id}</h3>"
-        f"<p>Folder: <code>{rel_dir}</code></p>"
+        f"<h3>Output Browser - Job #{safe_job_id}</h3>"
+        f"<p>Folder: <code>{safe_rel_dir}</code></p>"
         "<p><a href='/'>Back</a></p>"
         + rows_html
         + "</body></html>"
