@@ -6,6 +6,41 @@ This repository holds **runtime configuration** (Compose, env templates, scripts
 
 ---
 
+## 5-minute setup
+
+### Fastest path (Windows quick demo)
+
+```powershell
+# 1) Start containers from published images
+.\scripts\quick-demo.ps1
+
+# 2) In a new terminal, start the local web app
+.\scripts\run-webapp.ps1
+```
+
+Then open: `http://127.0.0.1:8110`
+
+### Standard path (custom .env)
+
+```powershell
+# 1) Create local env file
+Copy-Item .env.example .env
+
+# 2) Start container stack
+docker compose --env-file .env up -d
+
+# 3) Start web app (new terminal)
+.\scripts\run-webapp.ps1
+```
+
+Optional species service:
+
+```powershell
+docker compose --env-file .env --profile species up -d
+```
+
+---
+
 ## First-time setup (new clone)
 
 Do these steps **once** after you clone the repository.

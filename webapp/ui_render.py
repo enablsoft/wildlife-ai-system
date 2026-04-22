@@ -122,6 +122,28 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
 .preview-table{{width:100%;border-collapse:collapse;margin-top:8px}}
 .preview-table th,.preview-table td{{border:1px solid #e2e8f0;padding:6px 8px;text-align:left;font-size:13px}}
 .preview-table th{{background:#f8fafc}}
+.preview-scroll{{max-height:52vh;overflow:auto;border:1px solid #e2e8f0;border-radius:8px;background:#fff}}
+.export-preview-box{{max-width:min(1100px,96vw)}}
+@media (max-width: 980px) {{
+  .wrap{{padding:12px}}
+  .row{{grid-template-columns:1fr}}
+  .counts{{grid-template-columns:repeat(2,minmax(120px,1fr))}}
+  .browser-row{{grid-template-columns:1fr}}
+  .result-card{{grid-template-columns:1fr}}
+  .thumb{{max-width:100%}}
+  .actions{{gap:6px}}
+  .btn,.tab-btn{{width:100%}}
+  .app-modal-box{{max-width:96vw;max-height:86vh}}
+}}
+@media (max-width: 560px) {{
+  .title{{font-size:22px}}
+  .badge{{font-size:12px}}
+  .panel{{padding:12px}}
+  input{{padding:10px;font-size:14px}}
+  .job-meta{{font-size:12px}}
+  .tab-btn{{font-size:13px;padding:8px}}
+  .viewer-box{{width:98vw;height:94vh;padding:8px}}
+}}
 </style></head>
 <body><div class='wrap'>
 <div class='top'><div class='title'>Wildlife Processing Console</div><div class='badge'>{'Paused' if paused else 'Running'}</div></div>
@@ -334,6 +356,18 @@ This will:
     </div>
   </div>
 </div>
+<div id='exportPreviewModal' class='app-modal' role='dialog' aria-modal='true'>
+  <div class='app-modal-backdrop' id='exportPreviewBackdrop'></div>
+  <div class='app-modal-box export-preview-box'>
+    <div class='app-modal-title'>Excel Export Preview</div>
+    <div id='exportPreviewSummary' class='app-modal-body'></div>
+    <div id='exportPreviewTableWrap' class='preview-scroll'></div>
+    <div class='app-modal-actions' style='margin-top:10px'>
+      <button type='button' class='btn btn-subtle' id='exportPreviewCancel'>Cancel</button>
+      <button type='button' class='btn' id='exportPreviewDownload'>Download Excel</button>
+    </div>
+  </div>
+</div>
 <div id='tagEditModal' class='app-modal' role='dialog' aria-modal='true'>
   <div class='app-modal-backdrop' id='tagEditBackdrop'></div>
   <div class='app-modal-box' style='max-width:min(560px,94vw)'>
@@ -379,6 +413,7 @@ let ACTIVE_VIDEO = '';
 let ACTIVE_FRAME = '';
 let _confirmResolve = null;
 let _enqueuePreviewState = null;
+let _exportPreviewHideBlanks = true;
 let _lastBatchFolderPrompt = '';
 let _tagEditRel = '';
 let _tagEditSpeciesShort = '';
@@ -425,6 +460,9 @@ function closeConfirmModal(ok) {{
 function closeEnqueuePreview() {{
   document.getElementById('enqueuePreviewModal')?.classList.remove('show');
   _enqueuePreviewState = null;
+}}
+function closeExportPreview() {{
+  document.getElementById('exportPreviewModal')?.classList.remove('show');
 }}
 function openTagEditModal(rel, currentTag, labelText, speciesShort) {{
   _tagEditRel = rel;
@@ -579,6 +617,14 @@ async function commitEnqueuePreview() {{
   document.getElementById('enqueuePreviewCancel')?.addEventListener('click', () => closeEnqueuePreview());
   document.getElementById('enqueuePreviewBackdrop')?.addEventListener('click', () => closeEnqueuePreview());
   document.getElementById('enqueuePreviewOk')?.addEventListener('click', async () => commitEnqueuePreview());
+  document.getElementById('exportPreviewCancel')?.addEventListener('click', () => closeExportPreview());
+  document.getElementById('exportPreviewBackdrop')?.addEventListener('click', () => closeExportPreview());
+  document.getElementById('exportPreviewDownload')?.addEventListener('click', () => {{
+    const u = new URL('/export/frame-results.xlsx', window.location.origin);
+    u.searchParams.set('hide_blanks', _exportPreviewHideBlanks ? '1' : '0');
+    closeExportPreview();
+    window.location.href = u.toString();
+  }});
   document.getElementById('tagEditCancel')?.addEventListener('click', () => closeTagEditModal());
   document.getElementById('tagEditBackdrop')?.addEventListener('click', () => closeTagEditModal());
   document.getElementById('tagEditClear')?.addEventListener('click', async () => saveTagEditValue(''));
@@ -685,9 +731,15 @@ function applyHideBlanksSetting() {{
 }}
 async function previewExcelExport() {{
   const hideBlanks = HIDE_BLANKS;
+  _exportPreviewHideBlanks = hideBlanks;
   const rows = hideBlanks
     ? FRAME_RECORDS.filter((r) => !isBlankRecord(r))
     : FRAME_RECORDS.slice();
+  const step1 = await openConfirmModal(
+    `Prepare export preview?\\n\\nRows available: ${{rows.length}}\\nHide blank frames: ${{hideBlanks ? 'ON' : 'OFF'}}`,
+    {{ title: 'Export Frame Results' }}
+  );
+  if (!step1) return;
   const mode = hideBlanks ? 'Hide blank frames: ON' : 'Hide blank frames: OFF';
   const sample = rows.slice(0, 5);
   const tableRows = sample.map((r) => {{
@@ -697,26 +749,24 @@ async function previewExcelExport() {{
     const manual = esc(String(r.manual_tag || ''));
     return `<tr><td>${{esc(String(r.source || ''))}}</td><td>${{esc(String(r.frame || ''))}}</td><td>${{species}}</td><td>${{shortTag}}</td><td>${{typeTag}}</td><td>${{manual}}</td></tr>`;
   }}).join('');
-  const html = `
-    <div><b>Rows to export:</b> ${{rows.length}}</div>
-    <div><b>${{mode}}</b></div>
-    <div style="margin-top:6px">Columns include: <code>default_species_short</code>, <code>default_species_type</code>, <code>manual_tag</code>.</div>
-    <div style="margin-top:8px"><b>Preview (first ${{sample.length}} rows)</b></div>
-    <table class="preview-table">
-      <thead>
-        <tr><th>Video</th><th>Frame</th><th>Species</th><th>Default Short</th><th>Default Type</th><th>Manual Tag</th></tr>
-      </thead>
-      <tbody>
-        ${{tableRows || "<tr><td colspan='6'>No rows available with current filters.</td></tr>"}}
-      </tbody>
-    </table>
-    <div style="margin-top:10px">Proceed with export/download?</div>
-  `;
-  const ok = await openConfirmModal('', {{ title: 'Excel Export Preview', html: html }});
-  if (!ok) return;
-  const u = new URL('/export/frame-results.xlsx', window.location.origin);
-  u.searchParams.set('hide_blanks', hideBlanks ? '1' : '0');
-  window.location.href = u.toString();
+  const summary = document.getElementById('exportPreviewSummary');
+  if (summary) {{
+    summary.textContent = `Rows to export: ${{rows.length}}\\n${{mode}}\\nColumns include: default_species_short, default_species_type, manual_tag\\nPreview shown: first ${{sample.length}} row(s).`;
+  }}
+  const tableWrap = document.getElementById('exportPreviewTableWrap');
+  if (tableWrap) {{
+    tableWrap.innerHTML = `
+      <table class="preview-table">
+        <thead>
+          <tr><th>Video</th><th>Frame</th><th>Species</th><th>Default Short</th><th>Default Type</th><th>Manual Tag</th></tr>
+        </thead>
+        <tbody>
+          ${{tableRows || "<tr><td colspan='6'>No rows available with current filters.</td></tr>"}}
+        </tbody>
+      </table>
+    `;
+  }}
+  document.getElementById('exportPreviewModal')?.classList.add('show');
 }}
 async function editManualTag(annotatedRel) {{
   const rel = String(annotatedRel || '').trim();
@@ -829,12 +879,13 @@ function renderInlinePreview(r) {{
   }}
   const src = `/files/${{r.annotated_rel}}`;
   const sp = esc(formatSpeciesLabel(r));
+  const zoomTitle = `${{String(r.source || '').replace(/\\.[^.]+$/, '')}} - ${{r.frame || ''}}`;
   box.innerHTML = `
     <div><b>${{esc(r.source)}}</b></div>
     <div class='job-meta'>${{esc(r.frame)}} | ${{sp}}</div>
     <img src="${{src}}" alt="frame preview" loading="lazy" />
     <div class='job-meta'>${{esc(r.description || '')}}</div>
-    <div><button class='btn btn-subtle' type='button' onclick="openViewer('${{src}}','${{(r.source + ' :: ' + r.frame).replace(/'/g, "\\\\'")}}')">Open Zoom Viewer</button></div>
+    <div><button class='btn btn-subtle' type='button' onclick="openViewer('${{src}}','${{zoomTitle.replace(/'/g, "\\\\'")}}')">Open Zoom Viewer</button></div>
   `;
 }}
 function renderVideoBrowser() {{

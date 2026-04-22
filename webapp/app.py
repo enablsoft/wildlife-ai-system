@@ -156,7 +156,58 @@ def _enqueue_uploaded_file(
 def _clean_species(value: str | None) -> str:
     if not value:
         return "Unknown"
-    return value.replace("_", " ").strip().title()
+    raw = value.replace("_", " ").strip()
+    parts = [p.strip() for p in raw.split(";") if p.strip()]
+    # Some classifiers prefix taxonomy with a UUID-like dataset/model key.
+    # Keep user-facing species labels readable by dropping that leading token.
+    if parts:
+        first = parts[0].strip().strip("'\"{}[]()")
+        if re.fullmatch(r"[0-9a-fA-F]{32}", first) or re.fullmatch(
+            r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+            first,
+        ):
+            parts = parts[1:]
+    cleaned = ";".join(parts) if parts else raw
+    return cleaned.title()
+
+
+def _normalize_persisted_species_labels_once() -> None:
+    """One-time cleanup: strip UUID prefixes from historical species JSON predictions."""
+    if db.get_control("species_label_migration_v1", "0") == "1":
+        return
+    scanned = 0
+    updated = 0
+    for j in db.list_all_jobs():
+        raw_outputs = j.get("outputs_json")
+        if not raw_outputs:
+            continue
+        try:
+            outputs = json.loads(str(raw_outputs))
+        except Exception:
+            continue
+        if not isinstance(outputs, list):
+            continue
+        for row in outputs:
+            if not isinstance(row, dict):
+                continue
+            sp_path = Path(str(row.get("species_json") or ""))
+            if not sp_path.is_file():
+                continue
+            scanned += 1
+            try:
+                payload = json.loads(sp_path.read_text(encoding="utf-8"))
+                if not isinstance(payload, dict):
+                    continue
+                pred = str(payload.get("prediction") or "")
+                cleaned = _clean_species(pred)
+                if cleaned and cleaned != pred:
+                    payload["prediction"] = cleaned
+                    sp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+                    updated += 1
+            except Exception:
+                continue
+    db.set_control("species_label_migration_v1", "1")
+    logger.info("species_label_migration_v1 scanned=%s updated=%s", scanned, updated)
 
 
 def _species_short_name(species: str) -> str:
@@ -608,6 +659,7 @@ register_api_routes(
 
 @app.on_event("startup")
 async def startup_event() -> None:
+    _normalize_persisted_species_labels_once()
     threading.Thread(target=_worker_loop, daemon=True).start()
 
 
