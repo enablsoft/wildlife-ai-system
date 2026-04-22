@@ -1,3 +1,13 @@
+<#
+.SYNOPSIS
+  Run local ML/species API smoke calls for images.
+
+.DESCRIPTION
+  Read test images from `test-media/input` and write service responses to
+  `test-media/output` as JSON files for quick inspection.
+#>
+
+# --- Setup + env ---
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path -Parent $PSScriptRoot)
 
@@ -15,6 +25,7 @@ Get-Content ".env" | ForEach-Object {
 $mlPort = if ($env:ML_SERVICE_PORT) { $env:ML_SERVICE_PORT } else { "8010" }
 $speciesPort = if ($env:SPECIES_SERVICE_PORT) { $env:SPECIES_SERVICE_PORT } else { "8100" }
 
+# --- Input/output folders ---
 $inputDir = Join-Path (Get-Location) "test-media\\input"
 $outputDir = Join-Path (Get-Location) "test-media\\output"
 New-Item -ItemType Directory -Force -Path $inputDir | Out-Null
@@ -30,6 +41,7 @@ if (-not $images -or $images.Count -eq 0) {
     exit 1
 }
 
+# --- Service calls ---
 Write-Host "Found $($images.Count) image(s). Writing JSON results to $outputDir"
 
 foreach ($img in $images) {

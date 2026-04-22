@@ -1,7 +1,18 @@
+<#
+.SYNOPSIS
+  Extract frames from test videos then run local image tests.
+
+.DESCRIPTION
+  Ensure ffmpeg, extract 1 FPS frames from `test-media/video` into
+  `test-media/input`, then invoke `scripts/test-local.ps1`.
+#>
+
+# --- Setup ---
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path -Parent $PSScriptRoot)
 
 function Ensure-Ffmpeg {
+    # Best-effort installer for developer convenience on Windows.
     if (Get-Command ffmpeg -ErrorAction SilentlyContinue) {
         return $true
     }
@@ -19,6 +30,7 @@ function Ensure-Ffmpeg {
     return $false
 }
 
+# --- Discover inputs ---
 $videoDir = Join-Path (Get-Location) "test-media\\video"
 $framesDir = Join-Path (Get-Location) "test-media\\input"
 
@@ -36,6 +48,7 @@ if (-not (Ensure-Ffmpeg)) {
     exit 1
 }
 
+# --- Extract + run downstream image tests ---
 foreach ($v in $videos) {
     $base = [IO.Path]::GetFileNameWithoutExtension($v.Name)
     $outPattern = Join-Path $framesDir ("{0}_frame_%04d.jpg" -f $base)

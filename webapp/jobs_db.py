@@ -51,6 +51,15 @@ class JobsDb:
                 """
             )
             c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS frame_tags (
+                    annotated_rel TEXT PRIMARY KEY,
+                    tag_text TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+                """
+            )
+            c.execute(
                 "INSERT OR IGNORE INTO controls(key, value) VALUES ('paused', '0')"
             )
             cols = {r["name"] for r in c.execute("PRAGMA table_info(jobs)").fetchall()}
@@ -127,6 +136,25 @@ class JobsDb:
             )
             c.commit()
 
+    def get_control(self, key: str, default: str = "") -> str:
+        with self._connect() as c:
+            row = c.execute("SELECT value FROM controls WHERE key=?", (key,)).fetchone()
+            if not row:
+                return default
+            return str(row["value"])
+
+    def set_control(self, key: str, value: str) -> None:
+        with self._connect() as c:
+            c.execute(
+                """
+                INSERT INTO controls(key, value)
+                VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                """,
+                (key, value),
+            )
+            c.commit()
+
     def fetch_next_queued(self) -> dict[str, Any] | None:
         with self._connect() as c:
             row = c.execute(
@@ -183,6 +211,11 @@ class JobsDb:
                 "SELECT * FROM jobs ORDER BY id DESC LIMIT ?",
                 (limit,),
             ).fetchall()
+            return [dict(r) for r in rows]
+
+    def list_all_jobs(self) -> list[dict[str, Any]]:
+        with self._connect() as c:
+            rows = c.execute("SELECT * FROM jobs ORDER BY id DESC").fetchall()
             return [dict(r) for r in rows]
 
     def fetch_all_jobs_for_source_summary(self) -> list[dict[str, Any]]:
@@ -289,3 +322,27 @@ class JobsDb:
                 (max(0, int(processed)), job_id),
             )
             c.commit()
+
+    def upsert_frame_tag(self, annotated_rel: str, tag_text: str) -> None:
+        with self._connect() as c:
+            c.execute(
+                """
+                INSERT INTO frame_tags(annotated_rel, tag_text, updated_at)
+                VALUES (?, ?, datetime('now'))
+                ON CONFLICT(annotated_rel) DO UPDATE SET
+                    tag_text=excluded.tag_text,
+                    updated_at=datetime('now')
+                """,
+                (annotated_rel, tag_text),
+            )
+            c.commit()
+
+    def remove_frame_tag(self, annotated_rel: str) -> None:
+        with self._connect() as c:
+            c.execute("DELETE FROM frame_tags WHERE annotated_rel=?", (annotated_rel,))
+            c.commit()
+
+    def get_frame_tags_map(self) -> dict[str, str]:
+        with self._connect() as c:
+            rows = c.execute("SELECT annotated_rel, tag_text FROM frame_tags").fetchall()
+            return {str(r["annotated_rel"]): str(r["tag_text"]) for r in rows}

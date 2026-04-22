@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-  Pull published images, write .env from .env.demo if needed, start Docker stack, wait for /health.
+  Pull published images, write `.env` from `.env.demo` when needed, start Docker stack, and wait for `/health`.
 
 .DESCRIPTION
-  For a fast local smoke test without building images. Does not run git commit.
-  After this script succeeds, run .\scripts\run-webapp.ps1 in another terminal and open http://127.0.0.1:8110
+  Run a fast local smoke test without building images. This script does not run git commit.
+  After success, run `.\scripts\run-webapp.ps1` in another terminal and open `http://127.0.0.1:8110`.
 
 .PARAMETER Species
   Include the species classification service (Compose profile "species").

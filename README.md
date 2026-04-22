@@ -55,6 +55,7 @@ On **Windows (PowerShell)** from the repo root:
 | **`webapp/`** | FastAPI UI: queue, runs, frame browser, batch folder enqueue |
 | **`test-media/`** | Local input/output/video workspace (outputs are gitignored) |
 | **`config/`** | Optional `stack.json` overrides (see `stack.example.json`) |
+| **`docs/`** | Architecture, package roles, and upstream reference mapping |
 
 ---
 
@@ -67,6 +68,15 @@ On **Windows (PowerShell)** from the repo root:
 | `ghcr.io/enablsoft/wildlife-ai-species-service` | Optional species classification |
 
 Set full image names and tags in **`.env`** (see **`.env.example`**). If images are **private** on GHCR, run `docker login ghcr.io` before `docker compose pull`.
+
+---
+
+## Models used
+
+- **Detector model (ml-service):** MegaDetector/YOLO family model for object detection in camera-trap images (animal/person/vehicle style detections with bounding boxes + confidence).
+- **Species model (species-service, optional):** Species classification model that predicts species labels and scores for frames/images.
+
+The exact model version can vary by image tag (`ML_SERVICE_IMAGE`, `SPECIES_SERVICE_IMAGE` in `.env`).
 
 ---
 
@@ -187,15 +197,3 @@ A **FastAPI** app in `webapp/` provides a browser UI for local processing (uploa
 | `.\scripts\test-video.ps1` | Extract frames from a video in `test-media/video/` into `test-media/input/`, then run `test-local.ps1` |
 
 Supported image types: `.jpg`, `.jpeg`, `.png`, `.webp`. Video: `.mp4`, `.mov`, `.avi`, `.mkv`.
-
----
-
-## Repository visibility and GHCR
-
-- This repo can be **public or private** independently of **GHCR package** visibility (configure packages in GitHub org/user settings).
-
-**Linking packages to this repo**
-
-Images built from the upstream project can set `org.opencontainers.image.source` to **this** repository. After images are **rebuilt and pushed** to GHCR, GitHub can associate the package with this README.
-
-For packages published before that label existed: open each package → **Package settings** → **Connect repository** and select this repo. See [Connecting a repository to a package](https://docs.github.com/packages/managing-container-images-with-github-container-registry/connecting-a-repository-to-a-container-image).

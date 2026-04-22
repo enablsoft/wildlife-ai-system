@@ -1,7 +1,18 @@
+<#
+.SYNOPSIS
+  Run the FastAPI webapp locally.
+
+.DESCRIPTION
+  Ensure ffmpeg availability for video workflows, install webapp Python
+  requirements, then launch uvicorn on localhost:8110.
+#>
+
+# --- Setup ---
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path -Parent $PSScriptRoot)
 
 function Ensure-Ffmpeg {
+    # Best-effort auto-install path for Windows machines.
     if (Get-Command ffmpeg -ErrorAction SilentlyContinue) {
         return
     }
@@ -16,6 +27,7 @@ function Ensure-Ffmpeg {
     }
 }
 
+# --- Dependencies + app launch ---
 Ensure-Ffmpeg
 python -m pip install -r requirements-webapp.txt
 python -m uvicorn webapp.app:app --host 127.0.0.1 --port 8110

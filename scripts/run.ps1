@@ -1,7 +1,19 @@
+<#
+.SYNOPSIS
+  Start Docker services for local development.
+
+.DESCRIPTION
+  Load or create `.env`, clear conflicting image env vars, and start
+  Docker Compose (optionally with the species profile).
+
+.PARAMETER Species
+  Include species-service compose profile.
+#>
 param(
     [switch]$Species
 )
 
+# --- Setup ---
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path -Parent $PSScriptRoot)
 
@@ -15,6 +27,7 @@ if (-not (Test-Path ".env")) {
     Write-Host "Created .env from .env.example"
 }
 
+# --- Start stack ---
 if ($Species) {
     docker compose --env-file .env --profile species up -d
 } else {
