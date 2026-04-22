@@ -156,6 +156,26 @@ The exact model version can vary by image tag (`ML_SERVICE_IMAGE`, `SPECIES_SERV
    docker compose --env-file .env down
    ```
 
+### Setup and cleanup helpers
+
+Use helper scripts for common Docker lifecycle actions:
+
+```powershell
+# Setup/start (optionally pull first)
+.\scripts\stack-setup.ps1 -Pull
+.\scripts\stack-setup.ps1 -Pull -Species
+
+# Cleanup/stop
+.\scripts\stack-cleanup.ps1
+.\scripts\stack-cleanup.ps1 -Species
+
+# Deep cleanup (containers + compose images + volumes + dangling images)
+.\scripts\stack-cleanup.ps1 -Species -RemoveImages -RemoveVolumes -PruneDangling
+
+# Preview cleanup commands only (no changes)
+.\scripts\stack-cleanup.ps1 -Species -RemoveImages -RemoveVolumes -PruneDangling -Preview
+```
+
 ---
 
 ## Host paths (batch UI)
