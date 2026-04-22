@@ -246,6 +246,11 @@ A **FastAPI** app in `webapp/` provides a browser UI for local processing (uploa
 `run-webapp.ps1` installs Python dependencies into your environment and may attempt **ffmpeg** via `winget` on Windows if missing.
 It also auto-stops an existing local `uvicorn webapp.app:app` process on `127.0.0.1:8110` before starting, so reruns do not fail with port-in-use errors.
 
+**Screenshots**
+
+![Video frame processing](docs/images/video-frame-processing.png)
+![Batch process](docs/images/batch_process.png)
+
 **Webapp log rotation**
 
 - Logs are written to `logs/webapp.log`.
