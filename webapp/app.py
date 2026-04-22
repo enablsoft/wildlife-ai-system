@@ -386,9 +386,9 @@ def _render_page(
         err = j.get("error_text") or ""
         actions = ""
         if j["status"] in ("error", "cancelled"):
-            actions += f"<a class='link-btn js-action' href='/retry/{j['id']}'>Retry</a> "
+            actions += f"<a class='btn btn-subtle btn-compact js-action' href='/retry/{j['id']}'>Retry</a> "
         if j["status"] == "queued":
-            actions += f"<a class='link-btn js-action' href='/cancel/{j['id']}'>Cancel</a>"
+            actions += f"<a class='btn btn-subtle btn-compact js-action' href='/cancel/{j['id']}'>Cancel</a>"
         status_class = {
             "queued": "st-queued",
             "running": "st-running",
@@ -402,8 +402,8 @@ def _render_page(
         if out_dir:
             try:
                 Path(out_dir).relative_to(ROOT)
-                out_link = f"<a class='link-btn' href='/browse-output/{j['id']}'>Output Browser</a>"
-                open_link = f"<a class='link-btn' href='/open-output/{j['id']}'>Open Folder</a>"
+                out_link = f"<a class='btn btn-subtle btn-compact' href='/browse-output/{j['id']}'>Output Browser</a>"
+                open_link = f"<a class='btn btn-subtle btn-compact' href='/open-output/{j['id']}'>Open Folder</a>"
             except Exception:
                 out_link = ""
                 open_link = ""
@@ -432,7 +432,7 @@ def _render_page(
     else:
         if summary_page > 1:
             summary_pagination_bits.append(
-                f"<a class='link-btn' href='/?{_home_query(page, hide_blanks, summary_page - 1)}'>Prev</a>"
+                f"<a class='btn btn-subtle btn-compact' href='/?{_home_query(page, hide_blanks, summary_page - 1)}'>Prev</a>"
             )
         summary_pagination_bits.append(
             f"<span class='job-meta'>Sources {ss + 1}–{min(se, total_summary_sources)} of "
@@ -440,7 +440,7 @@ def _render_page(
         )
         if summary_page < summary_total_pages:
             summary_pagination_bits.append(
-                f"<a class='link-btn' href='/?{_home_query(page, hide_blanks, summary_page + 1)}'>Next</a>"
+                f"<a class='btn btn-subtle btn-compact' href='/?{_home_query(page, hide_blanks, summary_page + 1)}'>Next</a>"
             )
     summary_rows = []
     for v in summary_slice:
@@ -539,7 +539,7 @@ def _render_page(
     pagination_bits: list[str] = []
     if page > 1:
         pagination_bits.append(
-            f"<a class='link-btn' href='/?{_home_query(page - 1, hide_blanks, summary_page)}'>Prev</a>"
+            f"<a class='btn btn-subtle btn-compact' href='/?{_home_query(page - 1, hide_blanks, summary_page)}'>Prev</a>"
         )
     pagination_bits.append(
         f"<span class='job-meta'>Page {page} / {total_pages} ({total_records} total, "
@@ -547,7 +547,7 @@ def _render_page(
     )
     if page < total_pages:
         pagination_bits.append(
-            f"<a class='link-btn' href='/?{_home_query(page + 1, hide_blanks, summary_page)}'>Next</a>"
+            f"<a class='btn btn-subtle btn-compact' href='/?{_home_query(page + 1, hide_blanks, summary_page)}'>Next</a>"
         )
     has_active = counts.get("queued", 0) > 0 or counts.get("running", 0) > 0
     # Always embed all frames so the video browser checkbox can reveal blanks without a full reload.

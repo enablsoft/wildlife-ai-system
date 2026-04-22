@@ -59,9 +59,10 @@ body{{font-family:Inter,Segoe UI,Arial,sans-serif;background:#f6f8fb;color:#1e29
 .count b{{display:block;font-size:20px}}
 label{{font-size:13px;font-weight:600;color:#334155}}
 input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-sizing:border-box}}
-.btn{{display:inline-block;padding:9px 12px;border-radius:8px;background:#0f172a;color:white;text-decoration:none;border:0;cursor:pointer}}
+.btn{{display:inline-flex;align-items:center;justify-content:center;padding:9px 12px;border-radius:8px;background:#0f172a;color:white;text-decoration:none;border:0;cursor:pointer;font:inherit;line-height:1.2;appearance:none;-webkit-appearance:none}}
 .btn-compact{{padding:6px 10px;font-size:13px}}
 .btn-subtle{{background:#334155}}
+.btn:visited{{color:#fff}}
 .actions{{display:flex;flex-wrap:wrap;gap:8px;align-items:center}}
 .actions a{{margin-right:0}}
 .msg{{margin:8px 0;color:#0f766e}}
@@ -75,7 +76,6 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
 .job-err{{margin-top:8px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:8px;color:#991b1b;font-family:Consolas,monospace;font-size:12px}}
 .preview{{margin-top:10px;max-width:360px;border:1px solid #cbd5e1;border-radius:8px}}
 .job-actions{{margin-top:10px}}
-.link-btn{{display:inline-block;padding:6px 10px;background:#eef2ff;border:1px solid #c7d2fe;color:#3730a3;border-radius:8px;text-decoration:none;margin-right:8px}}
 .progress{{height:8px;background:#e2e8f0;border-radius:999px;overflow:hidden;margin-top:8px}}
 .bar{{height:100%;background:#3b82f6}}
 .tbl{{width:100%;border-collapse:collapse;font-size:13px}}
@@ -130,8 +130,6 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
       <a class='btn btn-subtle js-action' href='/pause'>Pause</a>
       <a class='btn btn-subtle js-action' href='/resume'>Resume</a>
       <a class='btn btn-subtle js-action' href='/cancel-all' data-confirm='Cancel all queued and running jobs?'>Cancel All</a>
-      <a class='btn btn-subtle js-action' href='/clear-jobs' data-confirm='Clear all job records from the database? This cannot be undone.'>Clear Jobs</a>
-      <a class='btn btn-subtle js-action' href='/reset-all' data-confirm='Reset everything? This will cancel active jobs, clear job history, and delete generated/local queued files.'>Reset All</a>
       <a class='btn btn-subtle' href='/' >Refresh</a>
     </div>
     <div class='counts'>
