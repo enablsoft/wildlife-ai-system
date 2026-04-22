@@ -8,7 +8,7 @@ Function index:
 """
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -219,7 +219,7 @@ def register_api_routes(
         except RuntimeError:
             logger.exception("export_frame_results_xlsx_failed")
             return JSONResponse({"ok": False, "error": "Excel export is currently unavailable."}, status_code=500)
-        ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         fn = f"wildlife_frame_results_{ts}.xlsx"
         headers = {"Content-Disposition": f'attachment; filename="{fn}"'}
         logger.info("export_xlsx rows=%s hide_blanks=%s filename=%s", len(records), hide, fn)

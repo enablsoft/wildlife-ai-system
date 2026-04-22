@@ -12,7 +12,7 @@ Function index:
 - export_frames_xlsx: build Excel payload for frame results.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from io import BytesIO
 
 
@@ -105,7 +105,7 @@ def export_frames_xlsx(
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:K{max(2, len(records) + 1)}"
     meta = wb.create_sheet("meta")
-    meta.append(["generated_at_utc", datetime.utcnow().isoformat()])
+    meta.append(["generated_at_utc", datetime.now(timezone.utc).isoformat()])
     meta.append(["hide_blanks", "1" if hide_blanks else "0"])
     meta.append(["rows", str(len(records))])
     meta.append(["log_file", log_file])

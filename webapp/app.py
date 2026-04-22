@@ -19,8 +19,9 @@ import re
 import subprocess
 import shutil
 import threading
+from contextlib import asynccontextmanager
 from urllib.parse import quote_plus, urlparse
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from typing import Any
@@ -46,10 +47,19 @@ DB_PATH = ROOT / "data" / "webapp_jobs.sqlite"
 LOG_DIR = ROOT / "logs"
 LOG_FILE = LOG_DIR / "webapp.log"
 
-app = FastAPI(title="Wildlife Media Processor", version="0.2.0")
-app.mount("/files", StaticFiles(directory=str(ROOT)), name="files")
 db = create_jobs_db(DB_PATH)
 _stop_worker = False
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    _normalize_persisted_species_labels_once()
+    threading.Thread(target=_worker_loop, daemon=True).start()
+    yield
+
+
+app = FastAPI(title="Wildlife Media Processor", version="0.2.0", lifespan=lifespan)
+app.mount("/files", StaticFiles(directory=str(ROOT)), name="files")
 logger = logging.getLogger("wildlife_webapp")
 if not logger.handlers:
     level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
@@ -694,12 +704,6 @@ register_api_routes(
     record_is_blank=_record_is_blank,
     export_frames_xlsx=_export_frames_xlsx,
 )
-
-
-@app.on_event("startup")
-async def startup_event() -> None:
-    _normalize_persisted_species_labels_once()
-    threading.Thread(target=_worker_loop, daemon=True).start()
 
 
 @app.get("/", response_class=HTMLResponse)
