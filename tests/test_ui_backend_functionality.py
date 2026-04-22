@@ -82,7 +82,7 @@ def test_ui_backend_api_endpoints_work(monkeypatch, tmp_path: Path) -> None:
 
     folder = tmp_path / "vid" / "batch"
     folder.mkdir(parents=True, exist_ok=True)
-    image = folder / "demo.jpg"
+    image = folder / "DeMo.JPG"
     image.write_bytes(b"jpg")
 
     client = TestClient(app_module.app)
@@ -107,6 +107,8 @@ def test_ui_backend_api_endpoints_work(monkeypatch, tmp_path: Path) -> None:
     payload = preview_resp.json()
     assert payload.get("ok") is True
     assert len(payload.get("items") or []) == 1
+    preview_input_path = (payload.get("items") or [{}])[0].get("input_path")
+    assert preview_input_path
 
     commit_resp = client.post(
         "/api/enqueue-folder-commit",
@@ -116,7 +118,7 @@ def test_ui_backend_api_endpoints_work(monkeypatch, tmp_path: Path) -> None:
             "fps": 1.0,
             "ml_url": "http://127.0.0.1:8010",
             "species_url": "http://127.0.0.1:8100",
-            "input_paths": [str(image).lower()],
+            "input_paths": [preview_input_path],
         },
     )
     assert commit_resp.status_code == 200

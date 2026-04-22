@@ -94,10 +94,11 @@ def _safe_rel(path_str: str) -> str:
 
 
 def _norm_path(p: Path) -> str:
+    """Resolved absolute path; preserve casing for case-sensitive filesystems and ffmpeg."""
     try:
-        return str(p.resolve()).lower()
+        return str(p.resolve())
     except Exception:
-        return str(p).lower()
+        return str(p)
 
 
 def _parse_exts(exts: str) -> set[str]:
