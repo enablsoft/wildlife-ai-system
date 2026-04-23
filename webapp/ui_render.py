@@ -423,6 +423,7 @@ This will:
     <div class='app-modal-title'>Excel Export Preview</div>
     <div id='exportPreviewSummary' class='app-modal-body'></div>
     <div id='exportPreviewTableWrap' class='preview-scroll'></div>
+    <div id='exportPreviewStatus' class='job-meta' aria-live='polite'></div>
     <div class='app-modal-actions' style='margin-top:10px'>
       <button type='button' class='btn btn-subtle' id='exportPreviewCancel'>Cancel</button>
       <button type='button' class='btn' id='exportPreviewDownload'>Download Excel</button>
@@ -477,6 +478,7 @@ let ACTIVE_FRAME = '';
 let _confirmResolve = null;
 let _enqueuePreviewState = null;
 let _exportPreviewHideBlanks = true;
+let _exportDownloadInFlight = false;
 let _lastBatchFolderPrompt = '';
 let _tagEditRel = '';
 let _tagEditSpeciesShort = '';
@@ -568,7 +570,15 @@ function closeEnqueuePreview() {{
   _enqueuePreviewState = null;
 }}
 function closeExportPreview() {{
+  if (_exportDownloadInFlight) return;
   document.getElementById('exportPreviewModal')?.classList.remove('show');
+  const status = document.getElementById('exportPreviewStatus');
+  if (status) status.textContent = '';
+  const btn = document.getElementById('exportPreviewDownload');
+  if (btn) {{
+    btn.disabled = false;
+    btn.textContent = 'Download Excel';
+  }}
 }}
 function openTagEditModal(rel, currentTag, labelText, speciesShort) {{
   _tagEditRel = rel;
@@ -752,11 +762,56 @@ async function commitEnqueuePreview() {{
   document.getElementById('enqueuePreviewOk')?.addEventListener('click', async () => commitEnqueuePreview());
   document.getElementById('exportPreviewCancel')?.addEventListener('click', () => closeExportPreview());
   document.getElementById('exportPreviewBackdrop')?.addEventListener('click', () => closeExportPreview());
-  document.getElementById('exportPreviewDownload')?.addEventListener('click', () => {{
+  document.getElementById('exportPreviewDownload')?.addEventListener('click', async () => {{
+    if (_exportDownloadInFlight) return;
     const u = new URL('/export/frame-results.xlsx', window.location.origin);
     u.searchParams.set('hide_blanks', _exportPreviewHideBlanks ? '1' : '0');
-    closeExportPreview();
-    window.location.href = u.toString();
+    const btn = document.getElementById('exportPreviewDownload');
+    const status = document.getElementById('exportPreviewStatus');
+    _exportDownloadInFlight = true;
+    if (btn) {{
+      btn.disabled = true;
+      btn.textContent = 'Preparing download...';
+    }}
+    if (status) status.textContent = 'Preparing Excel file. Download will start automatically.';
+    try {{
+      const resp = await fetch(u.toString(), {{ method: 'GET' }});
+      if (!resp.ok) {{
+        throw new Error(`HTTP ${{resp.status}}`);
+      }}
+      const blob = await resp.blob();
+      const contentDisp = String(resp.headers.get('Content-Disposition') || '');
+      let downloadName = 'frame-results.xlsx';
+      const fileNameStar = contentDisp.match(/filename\*=UTF-8''([^;]+)/i);
+      const fileNameBasic = contentDisp.match(/filename="?([^";]+)"?/i);
+      if (fileNameStar && fileNameStar[1]) {{
+        try {{
+          downloadName = decodeURIComponent(String(fileNameStar[1]).trim());
+        }} catch (_decodeErr) {{
+          downloadName = String(fileNameStar[1]).trim();
+        }}
+      }} else if (fileNameBasic && fileNameBasic[1]) {{
+        downloadName = String(fileNameBasic[1]).trim();
+      }}
+      const dl = document.createElement('a');
+      dl.href = URL.createObjectURL(blob);
+      dl.download = downloadName;
+      document.body.appendChild(dl);
+      dl.click();
+      dl.remove();
+      setTimeout(() => URL.revokeObjectURL(dl.href), 5000);
+      if (status) status.textContent = 'Download started.';
+      _exportDownloadInFlight = false;
+      closeExportPreview();
+    }} catch (_err) {{
+      _exportDownloadInFlight = false;
+      if (btn) {{
+        btn.disabled = false;
+        btn.textContent = 'Download Excel';
+      }}
+      if (status) status.textContent = '';
+      await openConfirmModal('Download failed. Please try again.', {{ title: 'Excel Export' }});
+    }}
   }});
   document.getElementById('tagEditCancel')?.addEventListener('click', () => closeTagEditModal());
   document.getElementById('tagEditBackdrop')?.addEventListener('click', () => closeTagEditModal());
