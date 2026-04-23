@@ -977,16 +977,11 @@ async function previewExcelExport() {{
     const typeTag = esc(String(r.species_type || ''));
     const manual = esc(String(r.manual_tag || ''));
     const speciesDisplayRaw = String(formatSpeciesLabel(r) || '');
-    const descSpeciesRaw =
-      'Likely '
-      + speciesDisplayRaw
-      + (latinRaw ? (' (' + latinRaw + ')') : '')
-      + (speciesConfRaw ? (' (' + speciesConfRaw + ')') : '')
-      + ' in '
-      + String(r.source || '')
-      + ', frame '
-      + String(r.frame || '')
-      + '.';
+    const descSpeciesRaw = [
+      `Likely ${{speciesDisplayRaw}}`,
+      latinRaw ? `(${{latinRaw}})` : '',
+      speciesConfRaw ? `- confidence ${{speciesConfRaw}}` : '',
+    ].filter((p) => !!p).join(' ');
     const descSpecies = esc(descSpeciesRaw);
     const detectorClass = String(r.detector_class || '').trim();
     const detectorConf = String(r.detector_confidence || '').trim();
@@ -1002,7 +997,7 @@ async function previewExcelExport() {{
     tableWrap.innerHTML = `
       <table class="preview-table">
         <thead>
-          <tr><th>Video</th><th>Frame</th><th>Trail Date</th><th>Trail Time</th><th>Trail Temp (°C)</th><th>Species</th><th>Latin</th><th>Species Conf</th><th>Taxonomy</th><th>Default Short</th><th>Default Type</th><th>Manual Tag</th><th>Description Species</th><th>Description Detector</th><th>Job</th></tr>
+          <tr><th>Video</th><th>Frame</th><th>Trail Date</th><th>Trail Time</th><th>Trail Temp (°C)</th><th>Species</th><th>Latin</th><th>Species Conf</th><th>Taxonomy</th><th>Default Short</th><th>Default Type</th><th>Manual Tag</th><th>Species Context</th><th>Detector Summary</th><th>Job</th></tr>
         </thead>
         <tbody>
           ${{tableRows || "<tr><td colspan='15'>No rows available with current filters.</td></tr>"}}

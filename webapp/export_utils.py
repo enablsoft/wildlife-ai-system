@@ -106,8 +106,8 @@ def export_frames_xlsx(
             "default_species_type",
             "species_taxonomy_full",
             "manual_tag",
-            "description_species_context",
-            "description_detector",
+            "species_context",
+            "detector_summary",
             "job_id",
         ]
     )
