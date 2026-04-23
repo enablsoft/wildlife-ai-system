@@ -108,27 +108,28 @@ def export_frames_xlsx(
     frames_ws.title = "frames"
     frames_ws.append(
         [
-            "video_source",
-            "frame",
-            "trail_cam_date",
-            "trail_cam_time",
-            "trail_cam_temp_(°C)",
-            "species_label_short",
-            "species_label_latin",
-            "species_confidence_(%)",
-            "default_species_short",
-            "default_species_type",
-            "species_taxonomy_full",
-            "manual_tag",
-            "species_context",
-            "detector_summary",
-            "job_id",
+            "Video Source",
+            "Frame File",
+            "Trail Camera Date",
+            "Trail Camera Time",
+            "Trail Camera Temperature (°C)",
+            "Species (Short)",
+            "Species (Latin)",
+            "Species Confidence (%)",
+            "Species Taxonomy (Full)",
+            "Default Species Label (Short)",
+            "Default Species Type",
+            "Manual Tags",
+            "Species Context",
+            "Detector Summary",
+            "Job ID",
         ]
     )
     for r in records:
         detector_class = r.get("detector_class", "")
         detector_conf = r.get("detector_confidence", "")
-        detector_desc = f"{detector_class} ({detector_conf})".strip() if detector_conf else str(detector_class or "")
+        detector_conf_pct = format_confidence_percent(detector_conf)
+        detector_desc = f"{detector_class} ({detector_conf_pct})".strip() if detector_conf_pct else str(detector_class or "")
         frames_ws.append(
             [
                 r.get("source", ""),

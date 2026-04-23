@@ -374,6 +374,10 @@ def _frame_records(jobs: list[dict[str, object]]) -> list[dict[str, str]]:
                 sp = json.loads(sp_path.read_text(encoding="utf-8"))
                 species = _clean_species(str(sp.get("prediction") or "Unknown"))
                 conf = sp.get("score")
+                if not isinstance(conf, (float, int)):
+                    conf = sp.get("prediction_score")
+                if not isinstance(conf, (float, int)):
+                    conf = sp.get("confidence")
                 if isinstance(conf, (float, int)):
                     species_conf = f"{float(conf):.2f}"
             except Exception:

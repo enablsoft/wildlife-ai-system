@@ -992,7 +992,7 @@ async function previewExcelExport() {{
     ].filter((p) => !!p).join(' ');
     const descSpecies = esc(descSpeciesRaw);
     const detectorClass = String(r.detector_class || '').trim();
-    const detectorConf = String(r.detector_confidence || '').trim();
+    const detectorConf = formatConfidencePercent(r.detector_confidence || '');
     const descDetector = esc(detectorConf ? `${{detectorClass}} (${{detectorConf}})` : detectorClass);
     return `<tr><td>${{esc(String(r.source || ''))}}</td><td>${{esc(String(r.frame || ''))}}</td><td>${{trailcamDate}}</td><td>${{trailcamTime}}</td><td>${{trailcamTemp}}</td><td>${{species}}</td><td>${{latin}}</td><td>${{speciesConf}}</td><td>${{taxonomy}}</td><td>${{shortTag}}</td><td>${{typeTag}}</td><td>${{manual}}</td><td>${{descSpecies}}</td><td>${{descDetector}}</td><td>${{jobId}}</td></tr>`;
   }}).join('');
@@ -1005,7 +1005,7 @@ async function previewExcelExport() {{
     tableWrap.innerHTML = `
       <table class="preview-table">
         <thead>
-          <tr><th>Video</th><th>Frame</th><th>Trail Date</th><th>Trail Time</th><th>Trail Temp (°C)</th><th>Species</th><th>Latin</th><th>Species Conf (%)</th><th>Taxonomy</th><th>Default Short</th><th>Default Type</th><th>Manual Tag</th><th>Species Context</th><th>Detector Summary</th><th>Job</th></tr>
+          <tr><th>Video Source</th><th>Frame File</th><th>Trail Camera Date</th><th>Trail Camera Time</th><th>Trail Camera Temperature (°C)</th><th>Species (Short)</th><th>Species (Latin)</th><th>Species Confidence (%)</th><th>Species Taxonomy (Full)</th><th>Default Species Label (Short)</th><th>Default Species Type</th><th>Manual Tags</th><th>Species Context</th><th>Detector Summary</th><th>Job ID</th></tr>
         </thead>
         <tbody>
           ${{tableRows || "<tr><td colspan='15'>No rows available with current filters.</td></tr>"}}
