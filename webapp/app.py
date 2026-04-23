@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from webapp.export_utils import (
@@ -107,6 +107,18 @@ def _parse_exts(exts: str) -> set[str]:
 
 def _runtime_dirs() -> tuple[Path, Path, Path]:
     return runtime_dirs(ROOT, db)
+
+
+def _ensure_dir_gitkeep(folder: Path) -> None:
+    """Ensure folder exists and keeps a .gitkeep placeholder."""
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        keep = folder / ".gitkeep"
+        if not keep.exists():
+            keep.write_text("", encoding="utf-8")
+    except Exception:
+        # Cleanup/reset should remain best-effort even if filesystem write fails.
+        pass
 
 
 def _folder_media_index(p: Path, wanted: set[str]) -> dict[str, tuple[Path, str]]:
@@ -275,76 +287,108 @@ def _normalize_tags_csv(raw: str) -> str:
 
 def _frame_records(jobs: list[dict[str, object]]) -> list[dict[str, str]]:
     records: list[dict[str, str]] = []
-    for j in jobs:
-        if j.get("status") != "done" or not j.get("outputs_json"):
-            continue
-        source = Path(str(j.get("input_path") or j.get("filename") or "")).name
-        try:
-            outputs = json.loads(str(j["outputs_json"]))
-        except Exception:
-            continue
-        if not isinstance(outputs, list):
-            continue
-        for row in outputs:
-            if not isinstance(row, dict):
-                continue
-            ann = str(row.get("annotated") or "")
-            frame_name = Path(str(row.get("input") or "")).name
-            species = "Unknown"
-            species_conf = ""
-            det_class = "Unknown"
-            det_conf = ""
-            sp_path = Path(str(row.get("species_json") or ""))
-            ml_path = Path(str(row.get("ml_json") or ""))
-            if sp_path.is_file():
-                try:
-                    sp = json.loads(sp_path.read_text(encoding="utf-8"))
-                    species = _clean_species(str(sp.get("prediction") or "Unknown"))
-                    conf = sp.get("score")
-                    if isinstance(conf, (float, int)):
-                        species_conf = f"{float(conf):.2f}"
-                except Exception:
-                    pass
-            if ml_path.is_file():
-                try:
-                    det = json.loads(ml_path.read_text(encoding="utf-8"))
-                    objs = det.get("objects") or []
-                    if objs and isinstance(objs, list):
-                        top = objs[0]
-                        if isinstance(top, dict):
-                            det_class = str(top.get("class") or "Unknown")
-                            c = top.get("confidence")
-                            if isinstance(c, (float, int)):
-                                det_conf = f"{float(c):.2f}"
-                except Exception:
-                    pass
-            species_short = _species_short_name(species)
-            species_latin = _species_latin_name(species)
-            desc = (
-                f"Likely {species_short}" + (f" ({species_latin})" if species_latin else "")
-                + (f" ({species_conf})" if species_conf else "")
-                + f" in {source}, frame {frame_name}. "
-                + f"Detector: {det_class}"
-                + (f" ({det_conf})" if det_conf else "")
-                + "."
-            )
+    seen_ann: set[str] = set()
+
+    def _append_record(source: str, row: dict[str, object], job_id: object) -> None:
+        ann = str(row.get("annotated") or "")
+        frame_name = Path(str(row.get("input") or "")).name
+        species = "Unknown"
+        species_conf = ""
+        det_class = "Unknown"
+        det_conf = ""
+        sp_path = Path(str(row.get("species_json") or ""))
+        ml_path = Path(str(row.get("ml_json") or ""))
+        if sp_path.is_file():
             try:
-                ann_rel = _safe_rel(ann)
+                sp = json.loads(sp_path.read_text(encoding="utf-8"))
+                species = _clean_species(str(sp.get("prediction") or "Unknown"))
+                conf = sp.get("score")
+                if isinstance(conf, (float, int)):
+                    species_conf = f"{float(conf):.2f}"
             except Exception:
+                pass
+        if ml_path.is_file():
+            try:
+                det = json.loads(ml_path.read_text(encoding="utf-8"))
+                objs = det.get("objects") or []
+                if objs and isinstance(objs, list):
+                    top = objs[0]
+                    if isinstance(top, dict):
+                        det_class = str(top.get("class") or "Unknown")
+                        c = top.get("confidence")
+                        if isinstance(c, (float, int)):
+                            det_conf = f"{float(c):.2f}"
+            except Exception:
+                pass
+        species_short = _species_short_name(species)
+        species_latin = _species_latin_name(species)
+        desc = (
+            f"Likely {species_short}" + (f" ({species_latin})" if species_latin else "")
+            + (f" ({species_conf})" if species_conf else "")
+            + f" in {source}, frame {frame_name}. "
+            + f"Detector: {det_class}"
+            + (f" ({det_conf})" if det_conf else "")
+            + "."
+        )
+        try:
+            ann_rel = _safe_rel(ann)
+        except Exception:
+            return
+        if ann_rel in seen_ann:
+            return
+        seen_ann.add(ann_rel)
+        records.append(
+            {
+                "job_id": str(job_id or ""),
+                "source": source,
+                "frame": frame_name,
+                "input_abs": str(row.get("input") or ""),
+                "species": species,
+                "description": desc,
+                "annotated_rel": ann_rel,
+                "species_short": species_short,
+                "species_latin": species_latin,
+                "species_type": _species_type_tag(species),
+            }
+        )
+
+    def _rows_from_output_dir(p: Path) -> list[dict[str, str]]:
+        rows: list[dict[str, str]] = []
+        if not p.is_dir():
+            return rows
+        for ann in sorted(p.glob("*.annotated.jpg"), key=lambda x: x.name.lower()):
+            base = re.sub(r"\.annotated\.jpg$", "", ann.name, flags=re.IGNORECASE)
+            ml = p / f"{base}.ml.json"
+            sp = p / f"{base}.species.json"
+            if not ml.is_file() or not sp.is_file():
                 continue
-            records.append(
+            rows.append(
                 {
-                    "job_id": str(j.get("id") or ""),
-                    "source": source,
-                    "frame": frame_name,
-                    "species": species,
-                    "description": desc,
-                    "annotated_rel": ann_rel,
-                    "species_short": species_short,
-                    "species_latin": species_latin,
-                    "species_type": _species_type_tag(species),
+                    "input": str(p / f"{base}.jpg"),
+                    "ml_json": str(ml),
+                    "species_json": str(sp),
+                    "annotated": str(ann),
                 }
             )
+        return rows
+
+    for j in jobs:
+        source = Path(str(j.get("input_path") or j.get("filename") or "")).name
+        raw_outputs = j.get("outputs_json")
+        outputs: list[dict[str, object]] = []
+        if raw_outputs:
+            try:
+                parsed = json.loads(str(raw_outputs))
+                if isinstance(parsed, list):
+                    outputs = [x for x in parsed if isinstance(x, dict)]
+            except Exception:
+                outputs = []
+        # Support partial frame visibility for in-progress runs.
+        if not outputs:
+            out_dir = Path(str(j.get("output_dir") or ""))
+            outputs = _rows_from_output_dir(out_dir)
+        for row in outputs:
+            _append_record(source, row, j.get("id"))
     return records
 
 
@@ -413,6 +457,14 @@ def _render_page(
     input_dir, video_dir, output_dir = _runtime_dirs()
     jobs = db.list_jobs(limit=JOBS_PANEL_LIMIT)
     tags_map = db.get_frame_tags_map()
+    try:
+        detector_min_confidence = max(
+            0.0,
+            min(1.0, float(str(db.get_control("detector_min_confidence", "0.0") or "0.0"))),
+        )
+    except Exception:
+        detector_min_confidence = 0.0
+    suppress_blank_species_boxes = str(db.get_control("suppress_blank_species_boxes", "1") or "1").strip() == "1"
     # Full list for Video Frame Browser (client-side hide/show blanks).
     all_frame_records = _frame_records(jobs)
     for r in all_frame_records:
@@ -465,10 +517,26 @@ def _render_page(
         last_log = logs[-1] if logs else ""
         err = j.get("error_text") or ""
         actions = ""
+        if j["status"] in ("running", "queued"):
+            actions += (
+                f"<a class='btn btn-subtle btn-compact js-action' href='/pause-job/{j['id']}' "
+                "data-confirm='Pause this run now?\\n\\nYou can continue it later from this Runs card.'>Pause</a> "
+            )
+        if j["status"] == "done":
+            actions += (
+                f"<a class='btn btn-subtle btn-compact js-action' href='/retry/{j['id']}' "
+                "data-confirm='Reprocess this completed run from the beginning?\\n\\nA fresh output set will be generated.'>Reprocess</a> "
+            )
         if j["status"] in ("error", "cancelled"):
-            actions += f"<a class='btn btn-subtle btn-compact js-action' href='/retry/{j['id']}'>Retry</a> "
+            actions += (
+                f"<a class='btn btn-subtle btn-compact js-action' href='/continue-job/{j['id']}' "
+                "data-confirm='Continue this run?\\n\\nThis resumes from saved progress in the existing run folder.'>Continue</a> "
+            )
         if j["status"] == "queued":
-            actions += f"<a class='btn btn-subtle btn-compact js-action' href='/cancel/{j['id']}'>Cancel</a>"
+            actions += (
+                f"<a class='btn btn-subtle btn-compact js-action' href='/cancel/{j['id']}' "
+                "data-confirm='Cancel this queued job?'>Cancel</a>"
+            )
         status_class = {
             "queued": "st-queued",
             "running": "st-running",
@@ -493,17 +561,19 @@ def _render_page(
         if total > 0:
             pct = int((done_n / total) * 100)
             prog = f"<div class='progress'><div class='bar' style='width:{pct}%'></div></div><div class='job-meta'>Progress: {done_n}/{total}</div>"
-        err_html = f'<div class="job-err">{html.escape(err)}</div>' if err else ""
+        err_style = "" if err else "display:none"
+        err_html = f'<div id="jobErr_{j["id"]}" class="job-err" style="{err_style}">{html.escape(err)}</div>'
         job_items.append(
-            f"<div class='job-card'>"
+            f"<div class='job-card' data-job-id='{j['id']}'>"
             f"<div class='job-head'><div><b>#{j['id']}</b> {j['filename']}</div>"
-            f"<span class='status {status_class}'>{j['status']}</span></div>"
-            f"<div class='job-meta'>Created: {j.get('created_at','')} | Started: {j.get('started_at') or '-'} | Finished: {j.get('finished_at') or '-'}</div>"
-            f"{prog}"
-            f"<div class='job-log'>{last_log or '-'}</div>"
+            f"<span id='jobStatus_{j['id']}' class='status {status_class}'>{j['status']}</span></div>"
+            f"<div id='jobMeta_{j['id']}' class='job-meta'>Created: {j.get('created_at','')} | Started: {j.get('started_at') or '-'} | Finished: {j.get('finished_at') or '-'}</div>"
+            f"<div id='jobCfg_{j['id']}' class='job-meta'>Detection: conf ≥ {detector_min_confidence:.2f} | suppress blank boxes: {'on' if suppress_blank_species_boxes else 'off'}</div>"
+            f"<div id='jobProg_{j['id']}'>{prog}</div>"
+            f"<div id='jobLog_{j['id']}' class='job-log'>{last_log or '-'}</div>"
             f"{err_html}"
-            f"{preview}"
-            f"<div class='job-actions'>{actions} {out_link} {open_link}</div>"
+            f"<div id='jobPreview_{j['id']}'>{preview}</div>"
+            f"<div id='jobActions_{j['id']}' class='job-actions'>{actions} {out_link} {open_link}</div>"
             f"</div>"
         )
     summary_pagination_bits: list[str] = []
@@ -528,14 +598,14 @@ def _render_page(
         proc = int(v["processed_frames"])
         pct = int((proc / total) * 100) if total > 0 else 0
         overall = (
-            "error"
-            if int(v["error"]) > 0
-            else "running"
+            "running"
             if int(v["running"]) > 0
-            else "queued"
-            if int(v["queued"]) > 0
             else "done"
             if int(v["done"]) > 0
+            else "queued"
+            if int(v["queued"]) > 0
+            else "error"
+            if int(v["error"]) > 0
             else "cancelled"
         )
         summary_rows.append(
@@ -615,6 +685,8 @@ def _render_page(
             else ""
         )
         rel_js = json.dumps(str(r.get("annotated_rel") or ""))
+        inp_js = json.dumps(str(r.get("input_abs") or ""))
+        job_js = json.dumps(str(r.get("job_id") or ""))
         result_rows.append(
             "<div class='result-card result-row' "
             f"data-is-blank='{'1' if is_blank else '0'}' "
@@ -632,7 +704,10 @@ def _render_page(
             f"{taxonomy_html}"
             f"{default_html}{manual_html}"
             f"<div class='desc-col' title='{html.escape(r['description'], quote=True)}'>{html.escape(r['description'])}</div>"
-            f"<div style='margin-top:4px'><button class='btn btn-subtle' type='button' onclick='editManualTag({rel_js})'>Edit tag</button></div>"
+            f"<div style='margin-top:4px' class='actions'>"
+            f"<button class='btn btn-subtle' type='button' onclick='editManualTag({rel_js})'>Edit tag</button>"
+            f"<button class='btn btn-subtle' type='button' onclick='rerunFrame({inp_js}, {job_js})'>Re-run frame</button>"
+            "</div>"
             "</div>"
             "</div>"
         )
@@ -674,6 +749,8 @@ def _render_page(
         species_mode=species_mode,
         has_active=has_active,
         records_json=records_json,
+        detector_min_confidence=detector_min_confidence,
+        suppress_blank_species_boxes=suppress_blank_species_boxes,
     )
 
 
@@ -796,6 +873,29 @@ async def cancel(job_id: int) -> RedirectResponse:
     return RedirectResponse(url="/", status_code=303)
 
 
+@app.get("/pause-job/{job_id}")
+async def pause_job(job_id: int) -> RedirectResponse:
+    db.cancel_job(job_id)
+    logger.info("job_id=%s action=pause_job", job_id)
+    return RedirectResponse(url=f"/?msg={quote_plus(f'Paused job #{job_id}.')}", status_code=303)
+
+
+@app.get("/continue-job/{job_id}")
+async def continue_job(job_id: int) -> RedirectResponse:
+    job = db.get_job(job_id)
+    status = str((job or {}).get("status") or "")
+    if status == "running":
+        return RedirectResponse(
+            url=f"/?msg={quote_plus(f'Job #{job_id} is still stopping. Wait a moment, then press Continue again.')}",
+            status_code=303,
+        )
+    if status == "queued":
+        return RedirectResponse(url=f"/?msg={quote_plus(f'Job #{job_id} is already queued.')}", status_code=303)
+    db.resume_job(job_id)
+    logger.info("job_id=%s action=continue_job_resume", job_id)
+    return RedirectResponse(url=f"/?msg={quote_plus(f'Continuing job #{job_id} from saved progress.')}", status_code=303)
+
+
 @app.get("/cancel-all")
 async def cancel_all() -> RedirectResponse:
     n = db.cancel_all_active()
@@ -837,6 +937,9 @@ async def reset_all() -> RedirectResponse:
                     f.unlink()
                 except Exception:
                     pass
+    _ensure_dir_gitkeep(output_dir)
+    _ensure_dir_gitkeep(input_dir)
+    _ensure_dir_gitkeep(video_dir)
     removed = db.clear_all_jobs()
     logger.info("reset_all cancelled=%s cleared=%s", cancelled, removed)
     return RedirectResponse(
@@ -871,6 +974,12 @@ async def open_output(job_id: int, request: Request) -> RedirectResponse:
             elif os.name == "posix":
                 subprocess.Popen(["xdg-open", str(p)])
     return RedirectResponse(url=_same_origin_referer_or(request), status_code=303)
+
+
+@app.get("/.well-known/appspecific/com.chrome.devtools.json", include_in_schema=False)
+async def chrome_devtools_probe() -> Response:
+    # Chrome probes this path in some contexts; return no-content to avoid noisy 404 logs.
+    return Response(status_code=204)
 
 
 @app.get("/browse-output/{job_id}", response_class=HTMLResponse)
@@ -957,6 +1066,7 @@ async def cleanup_output() -> RedirectResponse:
         for d in output_dir.glob("run_*"):
             if d.is_dir() and str(d) not in active_dirs:
                 shutil.rmtree(d, ignore_errors=True)
+    _ensure_dir_gitkeep(output_dir)
     logger.info("cleanup_output done")
     return RedirectResponse(url="/", status_code=303)
 
@@ -976,6 +1086,7 @@ async def reset_generated_media() -> RedirectResponse:
             if d.is_dir() and str(d) not in active_output_dirs:
                 shutil.rmtree(d, ignore_errors=True)
                 removed_out += 1
+    _ensure_dir_gitkeep(output_dir)
     if input_dir.is_dir():
         for f in input_dir.glob("*"):
             if f.is_file():
@@ -992,6 +1103,8 @@ async def reset_generated_media() -> RedirectResponse:
                     removed_vid += 1
                 except Exception:
                     pass
+    _ensure_dir_gitkeep(input_dir)
+    _ensure_dir_gitkeep(video_dir)
     logger.info(
         "reset_generated_media outputs_removed=%s input_removed=%s video_removed=%s",
         removed_out,

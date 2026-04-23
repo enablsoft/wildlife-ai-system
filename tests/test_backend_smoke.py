@@ -47,6 +47,18 @@ def _exercise_common_db_flow(db: object) -> None:
     db.remove_frame_tag("run_001/demo.annotated.jpg")  # type: ignore[attr-defined]
     assert "run_001/demo.annotated.jpg" not in db.get_frame_tags_map()  # type: ignore[attr-defined]
 
+    removed = db.clear_all_jobs()  # type: ignore[attr-defined]
+    assert isinstance(removed, int)
+    jid2 = db.add_job(  # type: ignore[attr-defined]
+        filename="fresh.jpg",
+        media_type="image",
+        input_path="c:/tmp/fresh.jpg",
+        fps=1.0,
+        ml_url="http://127.0.0.1:8010",
+        species_url="http://127.0.0.1:8100",
+    )
+    assert int(jid2) == 1
+
 
 def test_sqlite_backend_smoke(tmp_path: Path) -> None:
     """Validate SQLite JobsDb basic behavior."""

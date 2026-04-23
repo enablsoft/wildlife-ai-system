@@ -16,6 +16,16 @@ SUPPORTED_IMAGES = {".jpg", ".jpeg", ".png", ".webp"}
 SUPPORTED_VIDEOS = {".mp4", ".mov", ".avi", ".mkv"}
 
 
+def _is_blank_species_label(value: str | None) -> bool:
+    s = str(value or "").strip().lower()
+    if not s:
+        return True
+    if "__blank" in s:
+        return True
+    parts = [p.strip() for p in s.split(";") if p.strip()]
+    return bool(parts and parts[-1] == "blank")
+
+
 def _compact_species_label(value: str | None, max_len: int = 36) -> str:
     if not value:
         return ""
@@ -99,6 +109,8 @@ def draw_boxes(
     out_path: Path,
     species_label: str | None = None,
     species_score: float | None = None,
+    min_detector_confidence: float = 0.0,
+    suppress_when_blank_species: bool = False,
 ) -> None:
     im = Image.open(image_path).convert("RGB")
     d = ImageDraw.Draw(im)
@@ -109,14 +121,22 @@ def draw_boxes(
     except Exception:
         font = ImageFont.load_default()
     clean_species = _compact_species_label(species_label if isinstance(species_label, str) else None)
+    if suppress_when_blank_species and _is_blank_species_label(species_label):
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        im.save(out_path)
+        return
     for obj in det.get("objects") or []:
         bbox = obj.get("bbox")
         if not isinstance(bbox, list) or len(bbox) != 4:
             continue
+        conf_raw = obj.get("confidence")
+        conf = float(conf_raw) if isinstance(conf_raw, (float, int)) else 0.0
+        if conf < max(0.0, float(min_detector_confidence)):
+            continue
         x1, y1, x2, y2 = bbox
         d.rectangle((x1, y1, x2, y2), outline=(144, 238, 144), width=3)
         det_class = str(obj.get("class", "?")).replace("_", " ").strip().lower()
-        det_conf = float(obj.get("confidence", 0.0)) * 100.0
+        det_conf = conf * 100.0
         line1 = f"{det_class}: {det_conf:.0f}%"
         line2 = ""
         if clean_species:
@@ -147,6 +167,8 @@ def process_images(
     species_url: str,
     progress_cb: Any | None = None,
     should_continue_cb: Any | None = None,
+    min_detector_confidence: float = 0.0,
+    suppress_blank_species_boxes: bool = False,
 ) -> list[dict[str, str]]:
     output_dir.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, str]] = []
@@ -169,6 +191,8 @@ def process_images(
             ann_img,
             species_label=species_label if isinstance(species_label, str) else None,
             species_score=float(species_score) if isinstance(species_score, (int, float)) else None,
+            min_detector_confidence=min_detector_confidence,
+            suppress_when_blank_species=suppress_blank_species_boxes,
         )
         rows.append(
             {

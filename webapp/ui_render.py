@@ -45,6 +45,8 @@ def render_home_page_html(
     species_mode: str,
     has_active: bool,
     records_json: str,
+    detector_min_confidence: float,
+    suppress_blank_species_boxes: bool,
 ) -> str:
     """Render the full home page HTML/CSS/JS template from prepared view data."""
     safe_msg = html.escape(msg or "")
@@ -164,6 +166,7 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
       <a class='btn btn-subtle js-action' href='/cancel-all' data-confirm='Cancel all queued and running jobs?
 
 This keeps your existing job history and generated files.'>Cancel All</a>
+      <button class='btn btn-subtle' type='button' onclick='manualSyncNow()'>Sync View</button>
       <a class='btn btn-subtle' href='/' >Refresh</a>
     </div>
     <div class='counts'>
@@ -221,24 +224,24 @@ This keeps your existing job history and generated files.'>Cancel All</a>
   </form>
 </div>
 <div class='panel' style='margin-top:16px'>
-  <h3 style='margin-top:0'>Video / Source List</h3>
-  <p class='job-meta' style='margin:0 0 10px 0'>Aggregates <b>all</b> jobs in the database by source file (not limited to the recent jobs panel). {summary_table_page_size} sources per page.</p>
+  <h3 style='margin-top:0'>Media / Source List</h3>
+  <p class='job-meta' style='margin:0 0 10px 0'>Aggregates <b>all</b> image + video jobs in the database by source file (not limited to the recent jobs panel). {summary_table_page_size} sources per page.</p>
   <div class='actions' style='margin-bottom:10px'>{''.join(summary_pagination_bits)}</div>
   <table class='tbl'>
     <thead>
       <tr><th>Source</th><th>Overall</th><th>Queued</th><th>Running</th><th>Done</th><th>Error</th><th>Cancelled</th><th>Frame Progress</th></tr>
     </thead>
-    <tbody>
+    <tbody id='summaryBody'>
       {''.join(summary_rows) if summary_rows else '<tr><td colspan="8">No sources yet</td></tr>'}
     </tbody>
   </table>
 </div>
 <div class='panel' style='margin-top:16px'>
-  <h3 style='margin-top:0'>Video Frame Browser</h3>
+  <h3 style='margin-top:0'>Media Frame Browser</h3>
   <p class='job-meta' style='margin:0 0 10px 0'>Which frames appear here follows <b>Settings → Hide blank frames</b> (same as Frame Results).</p>
   <div class='browser-row'>
     <div>
-      <label>Videos</label>
+      <label>Sources</label>
       <div id='videoList' class='video-list'></div>
     </div>
     <div>
@@ -355,6 +358,23 @@ This will:
     </label>
     <p class='job-meta' style='margin-top:14px'>Changing this reloads the page (frame results reset to page 1; summary page is kept).</p>
   </div>
+  <div class='panel' style='margin-top:10px'>
+    <h3 style='margin-top:0'>Detection Thresholds</h3>
+    <p class='job-meta'>Tune detector <b>filtering</b> (not model prediction values). These settings apply to newly processed jobs.</p>
+    <label>Minimum confidence threshold to draw a box (0.0 - 1.0)</label>
+    <input id='settingsDetMinConf' type='number' min='0' max='1' step='0.05' value='{detector_min_confidence:.2f}' />
+    <p class='job-meta' style='margin-top:6px'>0.00 means show all detections. Higher values hide lower-confidence boxes.</p>
+    <div style='height:10px'></div>
+    <label style='font-size:14px;display:flex;align-items:flex-start;gap:10px;cursor:pointer;max-width:52rem'>
+      <input type='checkbox' id='settingsSuppressBlankBoxes' style='width:auto;margin-top:4px' {'checked' if suppress_blank_species_boxes else ''} onchange='applySuppressBlankBoxesSetting()' />
+      <span><b>Suppress boxes when species prediction is blank</b> (detector confidence is still stored in output JSON)</span>
+    </label>
+    <div style='height:10px'></div>
+    <div class='actions'>
+      <button class='btn' type='button' onclick='saveDetectionSettings()'>Save Detection Settings</button>
+    </div>
+    <p id='settingsDetectionMsg' class='job-meta' style='margin-top:10px'></p>
+  </div>
 </div>
 <div id='appConfirmModal' class='app-modal' role='dialog' aria-modal='true'>
   <div class='app-modal-backdrop' id='appConfirmBackdrop'></div>
@@ -428,8 +448,9 @@ This will:
 </div>
 <script>
 const SCROLL_KEY = 'wildlife_ui_scroll_y';
+const TAB_KEY = 'wildlife_ui_active_tab';
 const HAS_ACTIVE = {"true" if has_active else "false"};
-const FRAME_RECORDS = {records_json};
+let FRAME_RECORDS = {records_json};
 const HIDE_BLANKS = {"true" if hide_blanks else "false"};
 const SPECIES_MODE = {species_mode!r};
 let CURRENT_ZOOM = 100;
@@ -549,6 +570,33 @@ async function saveTagEditValue(nextValue) {{
   }}
   closeTagEditModal();
   window.location.reload();
+}}
+async function rerunFrame(inputPath, jobId) {{
+  const p = String(inputPath || '').trim();
+  if (!p) {{
+    await openConfirmModal('Cannot re-run this frame because input path is missing.', {{ title: 'Re-run Frame' }});
+    return;
+  }}
+  const ok = await openConfirmModal(
+    'Re-run this frame as a new image job?',
+    {{ title: 'Re-run Frame' }}
+  );
+  if (!ok) return;
+  const res = await fetch('/api/rerun-frame', {{
+    method: 'POST',
+    headers: {{ 'Content-Type': 'application/json' }},
+    body: JSON.stringify({{ input_path: p, job_id: Number(jobId || 0) || null }}),
+  }});
+  const data = await res.json();
+  if (!data.ok) {{
+    await openConfirmModal(data.error || 'Unable to re-run this frame.', {{ title: 'Re-run Frame' }});
+    return;
+  }}
+  const msg = data.job_id ? `Re-ran frame in job #${{data.job_id}}.` : 'Frame re-run complete.';
+  await openConfirmModal(msg, {{ title: 'Re-run Frame' }});
+  showTab('runs');
+  startRunsPolling();
+  void refreshRunsJobs();
 }}
 function esc(s) {{
   return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;');
@@ -697,13 +745,20 @@ window.addEventListener('load', () => {{
     u.searchParams.delete('msg');
     window.history.replaceState(null, '', u.pathname + (u.search ? u.search : ''));
   }}
+  const savedTab = sessionStorage.getItem(TAB_KEY);
+  if (savedTab === 'runs' || savedTab === 'settings' || savedTab === 'results') {{
+    showTab(savedTab);
+  }}
   const y = Number(sessionStorage.getItem(SCROLL_KEY) || '0');
   if (Number.isFinite(y) && y > 0) {{
     window.scrollTo({{ top: y, behavior: 'auto' }});
   }}
 }});
-document.querySelectorAll('a.js-action').forEach((el) => {{
-  el.addEventListener('click', async (evt) => {{
+function bindJsActionLinks() {{
+  document.querySelectorAll('a.js-action').forEach((el) => {{
+    if (el.dataset.boundClick === '1') return;
+    el.dataset.boundClick = '1';
+    el.addEventListener('click', async (evt) => {{
     evt.preventDefault();
     const href = el.getAttribute('href');
     if (!href) return;
@@ -721,8 +776,10 @@ document.querySelectorAll('a.js-action').forEach((el) => {{
       return;
     }}
     window.location.reload();
+    }});
   }});
-}});
+}}
+bindJsActionLinks();
 function openViewer(src, title) {{
   const ov = document.getElementById('viewerOverlay');
   const img = document.getElementById('viewerImage');
@@ -748,9 +805,11 @@ function setViewerZoom(v) {{
   if (rng && String(rng.value) !== String(z)) rng.value = String(z);
 }}
 function showTab(name) {{
-  const isResults = name === 'results';
-  const isRuns = name === 'runs';
-  const isSettings = name === 'settings';
+  const next = (name === 'runs' || name === 'settings') ? name : 'results';
+  sessionStorage.setItem(TAB_KEY, next);
+  const isResults = next === 'results';
+  const isRuns = next === 'runs';
+  const isSettings = next === 'settings';
   document.getElementById('tabResults').style.display = isResults ? 'block' : 'none';
   document.getElementById('tabRuns').style.display = isRuns ? 'block' : 'none';
   const ts = document.getElementById('tabSettings');
@@ -758,6 +817,14 @@ function showTab(name) {{
   document.getElementById('tabResultsBtn')?.classList.toggle('active', isResults);
   document.getElementById('tabRunsBtn')?.classList.toggle('active', isRuns);
   document.getElementById('tabSettingsBtn')?.classList.toggle('active', isSettings);
+  if (isRuns) {{
+    void refreshRunsJobs();
+  }}
+  if (isResults) {{
+    void refreshResultsRecords();
+  }}
+  syncRunsPollingForVisibleTab();
+  syncResultsPollingForVisibleTab();
 }}
 function applyHideBlanksSetting() {{
   const cb = document.getElementById('settingsHideBlanks');
@@ -909,6 +976,38 @@ async function saveRuntimeSettings() {{
     if (msg) msg.textContent = 'Failed to save settings.';
   }}
 }}
+async function saveDetectionSettings() {{
+  const confRaw = document.getElementById('settingsDetMinConf')?.value || '0';
+  const conf = Number(confRaw);
+  const suppress = !!document.getElementById('settingsSuppressBlankBoxes')?.checked;
+  const msg = document.getElementById('settingsDetectionMsg');
+  if (!Number.isFinite(conf) || conf < 0 || conf > 1) {{
+    if (msg) msg.textContent = 'Confidence must be between 0.0 and 1.0.';
+    return;
+  }}
+  if (msg) msg.textContent = 'Saving...';
+  try {{
+    const res = await fetch('/api/settings/detection', {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{
+        detector_min_confidence: conf,
+        suppress_blank_species_boxes: suppress,
+      }}),
+    }});
+    const data = await res.json();
+    if (!data.ok) {{
+      if (msg) msg.textContent = data.error || 'Failed to save detection settings.';
+      return;
+    }}
+    if (msg) msg.textContent = 'Saved. Applies to newly queued jobs.';
+  }} catch (_) {{
+    if (msg) msg.textContent = 'Failed to save detection settings.';
+  }}
+}}
+function applySuppressBlankBoxesSetting() {{
+  void saveDetectionSettings();
+}}
 function attachImageClickHandlers() {{
   document.querySelectorAll('#resultsBody img.thumb').forEach((img) => {{
     const src = img.getAttribute('src') || '';
@@ -965,7 +1064,7 @@ function renderVideoBrowser() {{
   const prevBox = document.getElementById('inlinePreview');
   if (!vList || !fList) return;
   if (videoNames.length === 0) {{
-    vList.innerHTML = "<div class='job-meta'>No videos with visible frames" + (hideBlanks ? " — <b>Settings</b>: turn off &quot;Hide blank…&quot; if every frame is blank." : "") + "</div>";
+    vList.innerHTML = "<div class='job-meta'>No sources with visible frames" + (hideBlanks ? " — <b>Settings</b>: turn off &quot;Hide blank…&quot; if every frame is blank." : "") + "</div>";
     fList.innerHTML = "<div class='job-meta'>No frames to show</div>";
     if (prevBox) prevBox.innerHTML = "<div class='job-meta'>No frame to preview</div>";
     return;
@@ -1120,18 +1219,308 @@ function renderTagFilterChips() {{
     counter.textContent = `${{n}} tag${{n === 1 ? '' : 's'}} active`;
   }}
 }}
+function renderResultsBodyFromRecords() {{
+  const body = document.getElementById('resultsBody');
+  if (!body) return;
+  if (!Array.isArray(FRAME_RECORDS) || FRAME_RECORDS.length === 0) {{
+    body.innerHTML = "<div class='job-meta'>No processed frames yet</div>";
+    return;
+  }}
+  body.innerHTML = FRAME_RECORDS.map((r) => {{
+    const speciesShort = String(r.species_short || '');
+    const speciesType = String(r.species_type || '');
+    const manualTag = String(r.manual_tag || '');
+    const manualBits = manualTag.split(',').map((x) => x.trim()).filter((x) => !!x);
+    const defaultBits = [speciesShort, speciesType].filter((x) => !!x);
+    const allBits = [];
+    const seen = new Set();
+    defaultBits.concat(manualBits).forEach((t) => {{
+      const k = String(t || '').toLowerCase();
+      if (!k || seen.has(k)) return;
+      seen.add(k);
+      allBits.push(t);
+    }});
+    const tagsNorm = allBits.map((t) => String(t || '').toLowerCase()).join(',');
+    const speciesDisp = formatSpeciesLabel(r);
+    const latin = String(r.species_latin || latinSpeciesName(r.species || '') || '');
+    const taxonomyRaw = fullTaxonomyLabel(r);
+    const taxonomy = esc(taxonomyRaw);
+    const isBlank = isBlankRecord(r);
+    const searchBlob = (
+      String(r.source || '') + ' '
+      + String(r.frame || '') + ' '
+      + String(r.species || '') + ' '
+      + String(speciesDisp || '') + ' '
+      + String(r.description || '') + ' '
+      + String(manualTag || '') + ' '
+      + String(speciesShort || '') + ' '
+      + String(latin || '') + ' '
+      + String(speciesType || '') + ' blank no species match'
+    ).toLowerCase();
+    const defaultHtml = defaultBits.length
+      ? `<div><b>Default tags:</b></div><div class='tag-list'>${{defaultBits.map((t) => `<span class='tag-chip default'>${{esc(t)}}</span>`).join('')}}</div>`
+      : '';
+    const manualHtml = manualBits.length
+      ? `<div><b>Manual tags:</b></div><div class='tag-list'>${{manualBits.map((t) => `<span class='tag-chip'>${{esc(t)}}</span>`).join('')}}</div>`
+      : '';
+    const latinHtml = (latin && !isBlank) ? `<div><b>Latin:</b> ${{esc(latin)}}</div>` : '';
+    const taxonomyHtml = (taxonomyRaw && !isBlank && taxonomyRaw !== speciesDisp) ? `<div><b>Taxonomy:</b> ${{taxonomy}}</div>` : '';
+    const rel = String(r.annotated_rel || '');
+    const relJs = JSON.stringify(rel);
+    const inputJs = JSON.stringify(String(r.input_abs || ''));
+    const jobJs = JSON.stringify(String(r.job_id || ''));
+    return (
+      `<div class='result-card result-row' data-is-blank='${{isBlank ? '1' : '0'}}' data-tags='${{esc(tagsNorm)}}' data-search='${{esc(searchBlob)}}'>`
+      + `<div><a href='/files/${{rel}}' target='_blank'><img src='/files/${{rel}}' class='thumb' onerror="this.onerror=null;this.replaceWith(document.createTextNode('Image removed'))"/></a></div>`
+      + "<div class='result-text'>"
+      + `<div><b>Job:</b> #${{esc(String(r.job_id || ''))}}</div>`
+      + `<div><b>Video:</b> ${{esc(String(r.source || ''))}}</div>`
+      + `<div><b>Frame:</b> ${{esc(String(r.frame || ''))}}</div>`
+      + `<div><b>Species:</b> ${{esc(String(speciesDisp || '—'))}}</div>`
+      + latinHtml + taxonomyHtml + defaultHtml + manualHtml
+      + `<div class='desc-col' title='${{esc(String(r.description || ''))}}'>${{esc(String(r.description || ''))}}</div>`
+      + `<div style='margin-top:4px' class='actions'><button class='btn btn-subtle' type='button' onclick='editManualTag(${{relJs}})'>Edit tag</button><button class='btn btn-subtle' type='button' onclick='rerunFrame(${{inputJs}}, ${{jobJs}})'>Re-run frame</button></div>`
+      + "</div></div>"
+    );
+  }}).join('');
+  attachImageClickHandlers();
+}}
+function statusClassFor(st) {{
+  if (st === 'queued') return 'st-queued';
+  if (st === 'running') return 'st-running';
+  if (st === 'done') return 'st-done';
+  if (st === 'error') return 'st-error';
+  if (st === 'cancelled') return 'st-cancelled';
+  return '';
+}}
+function renderJobProgressHtml(done, total) {{
+  const t = Number(total || 0);
+  const d = Number(done || 0);
+  if (!Number.isFinite(t) || t <= 0) return '';
+  const safeDone = Math.max(0, Math.min(d, t));
+  const pct = Math.max(0, Math.min(100, Math.round((safeDone / t) * 100)));
+  return `<div class='progress'><div class='bar' style='width:${{pct}}%'></div></div><div class='job-meta'>Progress: ${{safeDone}}/${{t}}</div>`;
+}}
+function renderLiveJobActions(job) {{
+  const id = Number(job.id || 0);
+  if (!id) return '';
+  let html = '';
+  if (job.can_pause) {{
+    html += `<a class='btn btn-subtle btn-compact js-action' href='/pause-job/${{id}}' data-confirm='Pause this run now?\\n\\nYou can continue it later from this Runs card.'>Pause</a> `;
+  }}
+  if (job.can_reprocess) {{
+    html += `<a class='btn btn-subtle btn-compact js-action' href='/retry/${{id}}' data-confirm='Reprocess this completed run from the beginning?\\n\\nA fresh output set will be generated.'>Reprocess</a> `;
+  }}
+  if (job.can_continue) {{
+    html += `<a class='btn btn-subtle btn-compact js-action' href='/continue-job/${{id}}' data-confirm='Continue this run?\\n\\nThis resumes from saved progress in the existing run folder.'>Continue</a> `;
+  }}
+  if (job.can_cancel) {{
+    html += `<a class='btn btn-subtle btn-compact js-action' href='/cancel/${{id}}' data-confirm='Cancel this queued job?'>Cancel</a>`;
+  }}
+  if (job.has_out_links) {{
+    html += ` <a class='btn btn-subtle btn-compact' href='/browse-output/${{id}}'>Output Browser</a>`;
+    html += ` <a class='btn btn-subtle btn-compact' href='/open-output/${{id}}'>Open Folder</a>`;
+  }}
+  return html;
+}}
+function overallForSummary(c) {{
+  if ((c.running || 0) > 0) return 'running';
+  if ((c.done || 0) > 0) return 'done';
+  if ((c.queued || 0) > 0) return 'queued';
+  if ((c.error || 0) > 0) return 'error';
+  return 'cancelled';
+}}
+function refreshSummaryFromLiveJobs(jobs) {{
+  const body = document.getElementById('summaryBody');
+  if (!body) return;
+  const agg = new Map();
+  jobs.forEach((j) => {{
+    const source = String(j.source || '').trim();
+    if (!source) return;
+    if (!agg.has(source)) {{
+      agg.set(source, {{
+        queued: 0,
+        running: 0,
+        done: 0,
+        error: 0,
+        cancelled: 0,
+        total: 0,
+        processed: 0,
+      }});
+    }}
+    const a = agg.get(source);
+    const st = String(j.status || '');
+    if (Object.prototype.hasOwnProperty.call(a, st)) a[st] += 1;
+    a.total += Number(j.total_items || 0);
+    a.processed += Number(j.processed_items || 0);
+  }});
+  body.querySelectorAll('tr').forEach((tr) => {{
+    const tds = tr.querySelectorAll('td');
+    if (tds.length < 8) return;
+    const source = String(tds[0]?.textContent || '').trim();
+    const a = agg.get(source);
+    if (!a) return;
+    const pct = a.total > 0 ? Math.round((a.processed / a.total) * 100) : 0;
+    tds[1].textContent = overallForSummary(a);
+    tds[2].textContent = String(a.queued);
+    tds[3].textContent = String(a.running);
+    tds[4].textContent = String(a.done);
+    tds[5].textContent = String(a.error);
+    tds[6].textContent = String(a.cancelled);
+    tds[7].textContent = `${{a.processed}}/${{a.total}} (${{pct}}%)`;
+  }});
+}}
+let _jobsPollTimer = null;
+let _resultsPollTimer = null;
+const _jobStateCache = new Map();
+async function refreshRunsJobs() {{
+  try {{
+    const res = await fetch('/api/jobs-live?limit=200', {{ cache: 'no-store' }});
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data || !data.ok || !Array.isArray(data.jobs)) return;
+    let hasActive = false;
+    let shouldSyncFrames = false;
+    data.jobs.forEach((job) => {{
+      const id = Number(job.id || 0);
+      if (!id) return;
+      const status = String(job.status || '');
+      const processed = Number(job.processed_items || 0);
+      const total = Number(job.total_items || 0);
+      const prior = _jobStateCache.get(id);
+      if (!prior || prior.status !== status || prior.processed !== processed || prior.total !== total) {{
+        shouldSyncFrames = true;
+        _jobStateCache.set(id, {{ status, processed, total }});
+      }}
+      if (status === 'queued' || status === 'running') hasActive = true;
+      const stEl = document.getElementById(`jobStatus_${{id}}`);
+      if (stEl) {{
+        stEl.textContent = status || '-';
+        stEl.className = `status ${{statusClassFor(status)}}`;
+      }}
+      const metaEl = document.getElementById(`jobMeta_${{id}}`);
+      if (metaEl) {{
+        const created = String(job.created_at || '');
+        const started = String(job.started_at || '') || '-';
+        const finished = String(job.finished_at || '') || '-';
+        metaEl.textContent = `Created: ${{created}} | Started: ${{started}} | Finished: ${{finished}}`;
+      }}
+      const cfgEl = document.getElementById(`jobCfg_${{id}}`);
+      if (cfgEl) {{
+        const conf = Number(job.detector_min_confidence || 0);
+        const confText = Number.isFinite(conf) ? conf.toFixed(2) : '0.00';
+        const suppress = !!job.suppress_blank_species_boxes;
+        cfgEl.textContent = `Detection: conf ≥ ${{confText}} | suppress blank boxes: ${{suppress ? 'on' : 'off'}}`;
+      }}
+      const progEl = document.getElementById(`jobProg_${{id}}`);
+      if (progEl) progEl.innerHTML = renderJobProgressHtml(job.processed_items, job.total_items);
+      const logEl = document.getElementById(`jobLog_${{id}}`);
+      if (logEl) logEl.textContent = String(job.last_log || '-');
+      const errEl = document.getElementById(`jobErr_${{id}}`);
+      if (errEl) {{
+        const msg = String(job.error_text || '').trim();
+        errEl.textContent = msg;
+        errEl.style.display = msg ? '' : 'none';
+      }}
+      const actEl = document.getElementById(`jobActions_${{id}}`);
+      if (actEl) {{
+        actEl.innerHTML = renderLiveJobActions(job);
+      }}
+      const prevEl = document.getElementById(`jobPreview_${{id}}`);
+      if (prevEl) {{
+        const rel = String(job.preview_rel || '');
+        if (rel) {{
+          prevEl.innerHTML = `<img src='/files/${{rel}}' class='preview' onerror="this.onerror=null;this.replaceWith(document.createTextNode('Preview not available (file removed)'))"/>`;
+        }} else {{
+          prevEl.innerHTML = '';
+        }}
+      }}
+    }});
+    bindJsActionLinks();
+    refreshSummaryFromLiveJobs(data.jobs);
+    if (shouldSyncFrames) {{
+      void refreshResultsRecords();
+    }}
+    if (!hasActive && _jobsPollTimer) {{
+      clearInterval(_jobsPollTimer);
+      _jobsPollTimer = null;
+    }}
+  }} catch (_) {{
+    // Ignore transient poll errors and retry on next interval.
+  }}
+}}
+function startRunsPolling() {{
+  if (_jobsPollTimer) return;
+  _jobsPollTimer = setInterval(() => {{
+    void refreshRunsJobs();
+  }}, 2000);
+  void refreshRunsJobs();
+}}
+function stopRunsPolling() {{
+  if (!_jobsPollTimer) return;
+  clearInterval(_jobsPollTimer);
+  _jobsPollTimer = null;
+}}
+function syncRunsPollingForVisibleTab() {{
+  if (!HAS_ACTIVE) {{
+    stopRunsPolling();
+    return;
+  }}
+  const runsTab = document.getElementById('tabRuns');
+  const isRunsVisible = !!runsTab && runsTab.style.display === 'block';
+  if (isRunsVisible) startRunsPolling();
+  else stopRunsPolling();
+}}
+async function refreshResultsRecords() {{
+  try {{
+    const hide = HIDE_BLANKS ? '1' : '0';
+    const res = await fetch(`/api/frame-records-live?hide_blanks=${{hide}}&limit=500`, {{ cache: 'no-store' }});
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data || !data.ok || !Array.isArray(data.records)) return;
+    FRAME_RECORDS = data.records;
+    renderResultsBodyFromRecords();
+    renderTagFilterChips();
+    filterResults();
+    renderVideoBrowser();
+    if (!data.has_active) {{
+      stopResultsPolling();
+    }}
+  }} catch (_) {{
+    // Ignore transient polling errors.
+  }}
+}}
+function startResultsPolling() {{
+  if (_resultsPollTimer) return;
+  _resultsPollTimer = setInterval(() => {{
+    void refreshResultsRecords();
+  }}, 2500);
+  void refreshResultsRecords();
+}}
+function stopResultsPolling() {{
+  if (!_resultsPollTimer) return;
+  clearInterval(_resultsPollTimer);
+  _resultsPollTimer = null;
+}}
+function syncResultsPollingForVisibleTab() {{
+  if (!HAS_ACTIVE) {{
+    stopResultsPolling();
+    return;
+  }}
+  const resultsTab = document.getElementById('tabResults');
+  const isResultsVisible = !!resultsTab && resultsTab.style.display === 'block';
+  if (isResultsVisible) startResultsPolling();
+  else stopResultsPolling();
+}}
+function manualSyncNow() {{
+  void refreshRunsJobs();
+  void refreshResultsRecords();
+}}
 attachImageClickHandlers();
 renderTagFilterChips();
 renderVideoBrowser();
-setTimeout(() => {{
-  const picker = document.getElementById('multiFiles');
-  const hasPickerFiles = !!(picker && picker.files && picker.files.length > 0);
-  const hasDropped = !!(window._droppedFiles && window._droppedFiles.length > 0);
-  const isTyping = document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA');
-  if (HAS_ACTIVE && !hasPickerFiles && !hasDropped && !isTyping) {{
-    window.location.reload();
-  }}
-}}, 3000)
+syncRunsPollingForVisibleTab();
+syncResultsPollingForVisibleTab();
 </script>
 </div></body></html>"""
 

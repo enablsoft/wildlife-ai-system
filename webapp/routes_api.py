@@ -15,6 +15,7 @@ from typing import Any, Callable
 from fastapi import Query
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
+from webapp.pipeline import process_images
 
 
 class EnqueueFolderPreviewIn(BaseModel):
@@ -40,10 +41,22 @@ class RuntimeSettingsIn(BaseModel):
     output_dir: str
 
 
+class DetectionSettingsIn(BaseModel):
+    """Define request payload for detection filtering settings."""
+    detector_min_confidence: float = 0.0
+    suppress_blank_species_boxes: bool = True
+
+
 class FrameTagIn(BaseModel):
     """Define request payload for manual frame tags."""
     annotated_rel: str
     tag_text: str = ""
+
+
+class RerunFrameIn(BaseModel):
+    """Define request payload for re-running a specific frame/image."""
+    input_path: str
+    job_id: int | None = None
 
 
 def register_api_routes(
@@ -131,6 +144,20 @@ def register_api_routes(
             }
         )
 
+    @app.post("/api/settings/detection")
+    async def api_settings_detection(body: DetectionSettingsIn) -> JSONResponse:
+        conf = max(0.0, min(1.0, float(body.detector_min_confidence)))
+        suppress_blank = bool(body.suppress_blank_species_boxes)
+        db.set_control("detector_min_confidence", f"{conf:.3f}")
+        db.set_control("suppress_blank_species_boxes", "1" if suppress_blank else "0")
+        return JSONResponse(
+            {
+                "ok": True,
+                "detector_min_confidence": conf,
+                "suppress_blank_species_boxes": suppress_blank,
+            }
+        )
+
     @app.post("/api/frame-tag")
     async def api_frame_tag(body: FrameTagIn) -> JSONResponse:
         rel = (body.annotated_rel or "").strip()
@@ -205,6 +232,131 @@ def register_api_routes(
         logger.info("batch_enqueued_commit count=%s skipped=%s missing=%s folder=%s", q, skipped, missing, p)
         msg = f"Queued {q} file(s), skipped {skipped} active duplicate(s), {missing} path(s) not in folder."
         return JSONResponse({"ok": True, "queued": q, "skipped": skipped, "missing": missing, "message": msg})
+
+    @app.get("/api/jobs-live")
+    async def api_jobs_live(limit: int = Query(200, ge=1, le=1000)) -> JSONResponse:
+        jobs = db.list_jobs(limit=int(limit))
+        repo_root = Path(__file__).resolve().parents[1]
+        payload: list[dict[str, Any]] = []
+        try:
+            live_conf = max(0.0, min(1.0, float(str(db.get_control("detector_min_confidence", "0.0") or "0.0"))))
+        except Exception:
+            live_conf = 0.0
+        suppress_blank = str(db.get_control("suppress_blank_species_boxes", "1") or "1").strip() == "1"
+        for j in jobs:
+            logs = str(j.get("logs") or "").strip().splitlines()
+            source = Path(str(j.get("input_path") or j.get("filename") or "")).name
+            status = str(j.get("status") or "")
+            preview_rel = ""
+            raw_outputs = j.get("outputs_json")
+            if raw_outputs:
+                try:
+                    outputs = json.loads(str(raw_outputs))
+                    if isinstance(outputs, list) and outputs and isinstance(outputs[0], dict):
+                        ann = Path(str(outputs[0].get("annotated") or ""))
+                        if ann.is_file():
+                            try:
+                                preview_rel = ann.relative_to(repo_root).as_posix()
+                            except Exception:
+                                preview_rel = ""
+                except Exception:
+                    preview_rel = ""
+            out_dir = str(j.get("output_dir") or "")
+            has_out_links = False
+            if out_dir:
+                try:
+                    Path(out_dir).relative_to(repo_root)
+                    has_out_links = True
+                except Exception:
+                    has_out_links = False
+            payload.append(
+                {
+                    "id": int(j.get("id") or 0),
+                    "status": status,
+                    "source": source,
+                    "total_items": int(j.get("total_items") or 0),
+                    "processed_items": int(j.get("processed_items") or 0),
+                    "created_at": str(j.get("created_at") or ""),
+                    "started_at": str(j.get("started_at") or ""),
+                    "finished_at": str(j.get("finished_at") or ""),
+                    "last_log": logs[-1] if logs else "",
+                    "error_text": str(j.get("error_text") or ""),
+                    "preview_rel": preview_rel,
+                    "can_pause": status in ("running", "queued"),
+                    "can_reprocess": status == "done",
+                    "can_continue": status in ("error", "cancelled"),
+                    "can_cancel": status == "queued",
+                    "has_out_links": has_out_links,
+                    "detector_min_confidence": live_conf,
+                    "suppress_blank_species_boxes": suppress_blank,
+                }
+            )
+        return JSONResponse({"ok": True, "jobs": payload})
+
+    @app.get("/api/frame-records-live")
+    async def api_frame_records_live(
+        hide_blanks: int = Query(1, ge=0, le=1),
+        limit: int = Query(500, ge=1, le=2000),
+    ) -> JSONResponse:
+        jobs = db.list_jobs(limit=int(limit))
+        records = frame_records(jobs)
+        tags_map = db.get_frame_tags_map()
+        for r in records:
+            r["manual_tag"] = tags_map.get(r.get("annotated_rel", ""), "")
+        if bool(hide_blanks):
+            records = [r for r in records if not record_is_blank(r["species"], r["description"])]
+        has_active = any(str(j.get("status") or "") in ("queued", "running") for j in jobs)
+        return JSONResponse({"ok": True, "records": records, "has_active": has_active})
+
+    @app.post("/api/rerun-frame")
+    async def api_rerun_frame(body: RerunFrameIn) -> JSONResponse:
+        raw_path = (body.input_path or "").strip()
+        if not raw_path:
+            return JSONResponse({"ok": False, "error": "input_path is required"}, status_code=400)
+        p = Path(raw_path)
+        try:
+            resolved = p.resolve(strict=True)
+        except Exception:
+            return JSONResponse({"ok": False, "error": "Input frame not found."}, status_code=400)
+        if not resolved.is_file():
+            return JSONResponse({"ok": False, "error": "Input path must be a file."}, status_code=400)
+        if resolved.suffix.lower() not in (".jpg", ".jpeg", ".png", ".webp"):
+            return JSONResponse({"ok": False, "error": "Only image frames can be re-run."}, status_code=400)
+
+        if not body.job_id:
+            return JSONResponse({"ok": False, "error": "job_id is required for in-place frame rerun."}, status_code=400)
+        j = db.get_job(int(body.job_id))
+        if not j:
+            return JSONResponse({"ok": False, "error": "Job not found."}, status_code=404)
+        out_dir_raw = str(j.get("output_dir") or "").strip()
+        if out_dir_raw:
+            out_dir = Path(out_dir_raw)
+        else:
+            repo_root = Path(__file__).resolve().parents[1]
+            default_output = Path(db.get_control("runtime_output_dir", str(repo_root / "test-media" / "output")))
+            out_dir = default_output / f"run_manual_job{int(body.job_id)}"
+            db.set_output_dir(int(body.job_id), str(out_dir))
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        ml_url = str(j.get("ml_url") or "http://127.0.0.1:8010")
+        species_url = str(j.get("species_url") or "http://127.0.0.1:8100")
+        rows = process_images(
+            [resolved],
+            out_dir,
+            ml_url=ml_url,
+            species_url=species_url,
+            min_detector_confidence=max(
+                0.0,
+                min(1.0, float(str(db.get_control("detector_min_confidence", "0.0") or "0.0"))),
+            ),
+            suppress_blank_species_boxes=str(db.get_control("suppress_blank_species_boxes", "1") or "1").strip().lower()
+            in ("1", "true", "yes", "on"),
+        )
+        if rows:
+            db.upsert_output_row(int(body.job_id), rows[0])
+            db.append_log(int(body.job_id), f"Frame re-run: {resolved.name}")
+        logger.info("frame_rerun_in_place job=%s input=%s", body.job_id, resolved)
+        return JSONResponse({"ok": True, "job_id": int(body.job_id)})
 
     @app.get("/export/frame-results.xlsx")
     async def export_frame_results_xlsx(

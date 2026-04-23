@@ -153,6 +153,12 @@ class MongoJobsDb:
             {"$set": {"status": "running", "started_at": _utc_now_str()}},
         )
 
+    def set_output_dir(self, job_id: int, output_dir: str) -> None:
+        self.jobs.update_one(
+            {"id": int(job_id)},
+            {"$set": {"output_dir": output_dir}},
+        )
+
     def append_log(self, job_id: int, line: str) -> None:
         row = self.jobs.find_one({"id": int(job_id)}, {"logs": 1})
         prev = str((row or {}).get("logs") or "")
@@ -219,8 +225,23 @@ class MongoJobsDb:
                     "started_at": None,
                     "finished_at": None,
                     "error_text": None,
+                    "output_dir": None,
+                    "outputs_json": None,
                     "total_items": 0,
                     "processed_items": 0,
+                }
+            },
+        )
+
+    def resume_job(self, job_id: int) -> None:
+        self.jobs.update_one(
+            {"id": int(job_id)},
+            {
+                "$set": {
+                    "status": "queued",
+                    "started_at": None,
+                    "finished_at": None,
+                    "error_text": None,
                 }
             },
         )
@@ -240,6 +261,8 @@ class MongoJobsDb:
 
     def clear_all_jobs(self) -> int:
         result = self.jobs.delete_many({})
+        # Reset job id sequence so fresh runs start at job #1 after full reset.
+        self.counters.update_one({"_id": "job_id"}, {"$set": {"seq": 0}}, upsert=True)
         return int(result.deleted_count)
 
     def has_running_jobs(self) -> bool:
@@ -272,6 +295,51 @@ class MongoJobsDb:
         self.jobs.update_one(
             {"id": int(job_id)},
             {"$set": {"processed_items": max(0, int(processed))}},
+        )
+
+    def upsert_output_row(self, job_id: int, row: dict[str, str]) -> None:
+        """Insert or replace one output artifact row for a job."""
+        doc = self.jobs.find_one(
+            {"id": int(job_id)},
+            {"outputs_json": 1, "processed_items": 1, "total_items": 1},
+        )
+        if not doc:
+            return
+        raw = doc.get("outputs_json") or "[]"
+        try:
+            outputs = json.loads(str(raw))
+        except Exception:
+            outputs = []
+        if not isinstance(outputs, list):
+            outputs = []
+        key_in = str(row.get("input") or "")
+        key_ann = str(row.get("annotated") or "")
+        replaced = False
+        for idx, item in enumerate(outputs):
+            if not isinstance(item, dict):
+                continue
+            same_input = str(item.get("input") or "") == key_in and key_in
+            same_ann = str(item.get("annotated") or "") == key_ann and key_ann
+            if same_input or same_ann:
+                outputs[idx] = row
+                replaced = True
+                break
+        if not replaced:
+            outputs.append(row)
+        total = int(doc.get("total_items") or 0)
+        processed = int(doc.get("processed_items") or 0)
+        if total <= 0:
+            total = len(outputs)
+        processed = min(max(processed, len(outputs)), total)
+        self.jobs.update_one(
+            {"id": int(job_id)},
+            {
+                "$set": {
+                    "outputs_json": json.dumps(outputs),
+                    "processed_items": processed,
+                    "total_items": total,
+                }
+            },
         )
 
     def upsert_frame_tag(self, annotated_rel: str, tag_text: str) -> None:

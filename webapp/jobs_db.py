@@ -172,6 +172,14 @@ class JobsDb:
             )
             c.commit()
 
+    def set_output_dir(self, job_id: int, output_dir: str) -> None:
+        with self._connect() as c:
+            c.execute(
+                "UPDATE jobs SET output_dir=? WHERE id=?",
+                (output_dir, job_id),
+            )
+            c.commit()
+
     def append_log(self, job_id: int, line: str) -> None:
         with self._connect() as c:
             row = c.execute("SELECT logs FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -239,7 +247,19 @@ class JobsDb:
                 """
                 UPDATE jobs
                 SET status='queued', started_at=NULL, finished_at=NULL, error_text=NULL,
-                    total_items=0, processed_items=0
+                    output_dir=NULL, outputs_json=NULL, total_items=0, processed_items=0
+                WHERE id=?
+                """,
+                (job_id,),
+            )
+            c.commit()
+
+    def resume_job(self, job_id: int) -> None:
+        with self._connect() as c:
+            c.execute(
+                """
+                UPDATE jobs
+                SET status='queued', started_at=NULL, finished_at=NULL, error_text=NULL
                 WHERE id=?
                 """,
                 (job_id,),
@@ -273,6 +293,8 @@ class JobsDb:
     def clear_all_jobs(self) -> int:
         with self._connect() as c:
             cur = c.execute("DELETE FROM jobs")
+            # Reset AUTOINCREMENT counter so fresh runs start at job #1 after full reset.
+            c.execute("DELETE FROM sqlite_sequence WHERE name='jobs'")
             c.commit()
             return int(cur.rowcount or 0)
 
@@ -322,6 +344,44 @@ class JobsDb:
             c.execute(
                 "UPDATE jobs SET processed_items=? WHERE id=?",
                 (max(0, int(processed)), job_id),
+            )
+            c.commit()
+
+    def upsert_output_row(self, job_id: int, row: dict[str, str]) -> None:
+        """Insert or replace one output artifact row for a job."""
+        with self._connect() as c:
+            cur = c.execute("SELECT outputs_json, processed_items, total_items FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if not cur:
+                return
+            raw = cur["outputs_json"] if cur["outputs_json"] else "[]"
+            try:
+                outputs = json.loads(str(raw))
+            except Exception:
+                outputs = []
+            if not isinstance(outputs, list):
+                outputs = []
+            key_in = str(row.get("input") or "")
+            key_ann = str(row.get("annotated") or "")
+            replaced = False
+            for idx, item in enumerate(outputs):
+                if not isinstance(item, dict):
+                    continue
+                same_input = str(item.get("input") or "") == key_in and key_in
+                same_ann = str(item.get("annotated") or "") == key_ann and key_ann
+                if same_input or same_ann:
+                    outputs[idx] = row
+                    replaced = True
+                    break
+            if not replaced:
+                outputs.append(row)
+            total = int(cur["total_items"] or 0)
+            processed = int(cur["processed_items"] or 0)
+            if total <= 0:
+                total = len(outputs)
+            processed = min(max(processed, len(outputs)), total)
+            c.execute(
+                "UPDATE jobs SET outputs_json=?, processed_items=?, total_items=? WHERE id=?",
+                (json.dumps(outputs), processed, total, job_id),
             )
             c.commit()
 

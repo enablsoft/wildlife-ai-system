@@ -277,6 +277,7 @@ It also auto-stops an existing local `uvicorn webapp.app:app` process on `127.0.
 
 ![Batch process](docs/images/batch_process.png)
 ![Video frame processing](docs/images/video-frame-processing.png)
+![Sample image](docs/images/sample.png)
 
 **Webapp log rotation**
 

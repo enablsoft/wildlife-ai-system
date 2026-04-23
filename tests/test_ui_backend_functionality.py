@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 import webapp.app as app_module
+import webapp.routes_api as routes_api_module
 
 
 def test_ui_button_action_routes_work(monkeypatch, tmp_path: Path) -> None:
@@ -17,6 +18,7 @@ def test_ui_button_action_routes_work(monkeypatch, tmp_path: Path) -> None:
     # Patch DB interactions so tests stay deterministic.
     monkeypatch.setattr(app_module.db, "set_paused", lambda v: calls.append(("set_paused", v)))
     monkeypatch.setattr(app_module.db, "retry_job", lambda job_id: calls.append(("retry_job", job_id)))
+    monkeypatch.setattr(app_module.db, "resume_job", lambda job_id: calls.append(("resume_job", job_id)))
     monkeypatch.setattr(app_module.db, "cancel_job", lambda job_id: calls.append(("cancel_job", job_id)))
     monkeypatch.setattr(app_module.db, "cancel_all_active", lambda: 2)
     monkeypatch.setattr(app_module.db, "has_running_jobs", lambda: False)
@@ -44,6 +46,8 @@ def test_ui_button_action_routes_work(monkeypatch, tmp_path: Path) -> None:
         "/resume",
         "/retry/11",
         "/cancel/12",
+        "/pause-job/13",
+        "/continue-job/14",
         "/cancel-all",
         "/clear-jobs",
         "/cleanup-output",
@@ -57,7 +61,9 @@ def test_ui_button_action_routes_work(monkeypatch, tmp_path: Path) -> None:
     assert ("set_paused", True) in calls
     assert ("set_paused", False) in calls
     assert ("retry_job", 11) in calls
+    assert ("resume_job", 14) in calls
     assert ("cancel_job", 12) in calls
+    assert ("cancel_job", 13) in calls
 
 
 def test_ui_backend_api_endpoints_work(monkeypatch, tmp_path: Path) -> None:
@@ -72,6 +78,14 @@ def test_ui_backend_api_endpoints_work(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(app_module.db, "latest_job_for_input", lambda _p, _t: None)
     monkeypatch.setattr(
         app_module.db,
+        "get_job",
+        lambda _job_id: {"ml_url": "http://127.0.0.1:8010", "species_url": "http://127.0.0.1:8100"},
+    )
+    monkeypatch.setattr(app_module.db, "upsert_output_row", lambda _job_id, _row: None)
+    monkeypatch.setattr(app_module.db, "append_log", lambda _job_id, _line: None)
+    monkeypatch.setattr(app_module.db, "set_output_dir", lambda _job_id, _path: None)
+    monkeypatch.setattr(
+        app_module.db,
         "add_job",
         lambda filename, media_type, input_path, fps, ml_url, species_url: (
             queued.append((filename, media_type)) or 123
@@ -79,6 +93,18 @@ def test_ui_backend_api_endpoints_work(monkeypatch, tmp_path: Path) -> None:
     )
     monkeypatch.setattr(app_module.db, "upsert_frame_tag", lambda rel, tag: tag_updates.append((rel, tag)))
     monkeypatch.setattr(app_module.db, "remove_frame_tag", lambda rel: tag_updates.append((rel, "")))
+    monkeypatch.setattr(
+        routes_api_module,
+        "process_images",
+        lambda images, output_dir, ml_url, species_url, min_detector_confidence=0.0, suppress_blank_species_boxes=True: [
+            {
+                "input": str(images[0]),
+                "ml_json": str(output_dir / f"{images[0].stem}.ml.json"),
+                "species_json": str(output_dir / f"{images[0].stem}.species.json"),
+                "annotated": str(output_dir / f"{images[0].stem}.annotated.jpg"),
+            }
+        ],
+    )
 
     folder = tmp_path / "vid" / "batch"
     folder.mkdir(parents=True, exist_ok=True)
@@ -98,6 +124,15 @@ def test_ui_backend_api_endpoints_work(monkeypatch, tmp_path: Path) -> None:
     assert settings_resp.status_code == 200
     assert settings_resp.json().get("ok") is True
     assert "runtime_output_dir" in controls
+
+    det_settings_resp = client.post(
+        "/api/settings/detection",
+        json={"detector_min_confidence": 0.55, "suppress_blank_species_boxes": True},
+    )
+    assert det_settings_resp.status_code == 200
+    assert det_settings_resp.json().get("ok") is True
+    assert controls.get("detector_min_confidence", "").startswith("0.55")
+    assert controls.get("suppress_blank_species_boxes") == "1"
 
     preview_resp = client.post(
         "/api/enqueue-folder-preview",
@@ -124,6 +159,10 @@ def test_ui_backend_api_endpoints_work(monkeypatch, tmp_path: Path) -> None:
     assert commit_resp.status_code == 200
     assert commit_resp.json().get("ok") is True
     assert queued
+
+    rerun_resp = client.post("/api/rerun-frame", json={"input_path": str(image), "job_id": 123})
+    assert rerun_resp.status_code == 200
+    assert rerun_resp.json().get("ok") is True
 
     tag_resp = client.post("/api/frame-tag", json={"annotated_rel": "a/b.jpg", "tag_text": "fox, night"})
     assert tag_resp.status_code == 200
