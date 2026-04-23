@@ -61,7 +61,7 @@ body{{font-family:Inter,Segoe UI,Arial,sans-serif;background:#f6f8fb;color:#1e29
 .title{{font-size:28px;font-weight:700}}
 .badge{{padding:6px 10px;border-radius:999px;background:{'#fef3c7' if paused else '#dcfce7'};color:#111827;font-weight:600}}
 .row{{display:grid;grid-template-columns:1fr 1fr;gap:16px}}
-.panel{{background:white;border:1px solid #e5e7eb;border-radius:14px;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}}
+.panel{{background:white;border:1px solid #e5e7eb;border-radius:14px;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.04);overflow-x:hidden}}
 .counts{{display:grid;grid-template-columns:repeat(5,minmax(80px,1fr));gap:8px;margin-top:8px}}
 .count{{background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:10px;text-align:center}}
 .count b{{display:block;font-size:20px}}
@@ -89,6 +89,9 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
 .tbl{{width:100%;border-collapse:collapse;font-size:13px}}
 .tbl th,.tbl td{{border:1px solid #e2e8f0;padding:8px;text-align:left}}
 .tbl th{{background:#f8fafc}}
+.table-scroll{{width:100%;max-width:100%;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;box-sizing:border-box}}
+.table-scroll .tbl{{min-width:760px}}
+.table-scroll .tbl th,.table-scroll .tbl td{{white-space:nowrap}}
 .thumb{{max-width:220px;border:1px solid #cbd5e1;border-radius:6px}}
 .results-list{{display:grid;gap:10px}}
 .result-card{{display:grid;grid-template-columns:240px 1fr;gap:12px;align-items:start;padding:10px;border:1px solid #e2e8f0;border-radius:10px;background:#fff}}
@@ -132,6 +135,7 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
 .preview-table th,.preview-table td{{border:1px solid #e2e8f0;padding:6px 8px;text-align:left;font-size:13px}}
 .preview-table th{{background:#f8fafc}}
 .preview-scroll{{max-height:52vh;overflow:auto;border:1px solid #e2e8f0;border-radius:8px;background:#fff}}
+.preview-table{{min-width:1650px}}
 .export-preview-box{{max-width:min(1100px,96vw)}}
 @media (max-width: 980px) {{
   .wrap{{padding:12px}}
@@ -143,6 +147,10 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
   .actions{{gap:6px}}
   .btn,.tab-btn{{width:100%}}
   .app-modal-box{{max-width:96vw;max-height:86vh}}
+  .panel{{border-radius:12px}}
+  .actions{{row-gap:8px}}
+  .job-meta{{line-height:1.35}}
+  .tbl th,.tbl td{{padding:7px;font-size:12px}}
 }}
 @media (max-width: 560px) {{
   .title{{font-size:22px}}
@@ -152,6 +160,14 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
   .job-meta{{font-size:12px}}
   .tab-btn{{font-size:13px;padding:8px}}
   .viewer-box{{width:98vw;height:94vh;padding:8px}}
+  .counts{{grid-template-columns:1fr}}
+  .actions{{flex-direction:column;align-items:stretch;gap:8px}}
+  .actions .btn,.actions .tab-btn{{width:100%}}
+  .result-text{{gap:7px}}
+  .tag-list{{gap:8px}}
+  .preview-scroll{{max-height:60vh}}
+  .preview-table th,.preview-table td{{font-size:12px;padding:5px 6px}}
+  .app-modal-box.export-preview-box{{max-width:98vw;padding:10px}}
 }}
 </style></head>
 <body><div class='wrap'>
@@ -227,14 +243,16 @@ This keeps your existing job history and generated files.'>Cancel All</a>
   <h3 style='margin-top:0'>Media / Source List</h3>
   <p class='job-meta' style='margin:0 0 10px 0'>Aggregates <b>all</b> image + video jobs in the database by source file (not limited to the recent jobs panel). {summary_table_page_size} sources per page.</p>
   <div class='actions' style='margin-bottom:10px'>{''.join(summary_pagination_bits)}</div>
-  <table class='tbl'>
-    <thead>
-      <tr><th>Source</th><th>Overall</th><th>Queued</th><th>Running</th><th>Done</th><th>Error</th><th>Cancelled</th><th>Frame Progress</th></tr>
-    </thead>
-    <tbody id='summaryBody'>
-      {''.join(summary_rows) if summary_rows else '<tr><td colspan="8">No sources yet</td></tr>'}
-    </tbody>
-  </table>
+  <div class='table-scroll'>
+    <table class='tbl'>
+      <thead>
+        <tr><th>Source</th><th>Overall</th><th>Queued</th><th>Running</th><th>Done</th><th>Error</th><th>Cancelled</th><th>Frame Progress</th></tr>
+      </thead>
+      <tbody id='summaryBody'>
+        {''.join(summary_rows) if summary_rows else '<tr><td colspan="8">No sources yet</td></tr>'}
+      </tbody>
+    </table>
+  </div>
 </div>
 <div class='panel' style='margin-top:16px'>
   <h3 style='margin-top:0'>Media Frame Browser</h3>
@@ -509,6 +527,14 @@ function trailcamOverlayLabel(r) {{
   if (t) bits.push(t);
   if (temp) bits.push(temp);
   return bits.join(' | ');
+}}
+function formatTrailTemp(tempRaw) {{
+  const t = String(tempRaw || '').trim();
+  if (!t) return '';
+  const cleaned = t.replace('°', '');
+  const m = cleaned.match(/^(-?\\d+)\\s*([CF])?$/i);
+  if (m) return String(m[1] || '').trim();
+  return cleaned;
 }}
 function frameNumberLabel(frameName) {{
   const s = String(frameName || '').trim();
@@ -882,27 +908,49 @@ async function previewExcelExport() {{
   const previewCount = [5, 10, 20].includes(parsedRows) ? parsedRows : 5;
   const sample = rows.slice(0, previewCount);
   const tableRows = sample.map((r) => {{
+    const jobId = esc(String(r.job_id || ''));
+    const trailcamDate = esc(String(r.overlay_date || ''));
+    const trailcamTime = esc(String(r.overlay_time || ''));
+    const trailcamTemp = esc(formatTrailTemp(String(r.overlay_temp || '')));
     const species = esc(formatSpeciesLabel(r));
-    const latin = esc(String(r.species_latin || latinSpeciesName(r.species || '') || ''));
+    const latinRaw = String(r.species_latin || latinSpeciesName(r.species || '') || '');
+    const latin = esc(latinRaw);
+    const speciesConfRaw = String(r.species_confidence || '');
+    const speciesConf = esc(speciesConfRaw);
     const taxonomy = esc(String(r.species || ''));
     const shortTag = esc(String(r.species_short || ''));
     const typeTag = esc(String(r.species_type || ''));
     const manual = esc(String(r.manual_tag || ''));
-    return `<tr><td>${{esc(String(r.source || ''))}}</td><td>${{esc(String(r.frame || ''))}}</td><td>${{species}}</td><td>${{latin}}</td><td>${{taxonomy}}</td><td>${{shortTag}}</td><td>${{typeTag}}</td><td>${{manual}}</td></tr>`;
+    const speciesDisplayRaw = String(formatSpeciesLabel(r) || '');
+    const descSpeciesRaw =
+      'Likely '
+      + speciesDisplayRaw
+      + (latinRaw ? (' (' + latinRaw + ')') : '')
+      + (speciesConfRaw ? (' (' + speciesConfRaw + ')') : '')
+      + ' in '
+      + String(r.source || '')
+      + ', frame '
+      + String(r.frame || '')
+      + '.';
+    const descSpecies = esc(descSpeciesRaw);
+    const detectorClass = String(r.detector_class || '').trim();
+    const detectorConf = String(r.detector_confidence || '').trim();
+    const descDetector = esc(detectorConf ? `${{detectorClass}} (${{detectorConf}})` : detectorClass);
+    return `<tr><td>${{esc(String(r.source || ''))}}</td><td>${{esc(String(r.frame || ''))}}</td><td>${{trailcamDate}}</td><td>${{trailcamTime}}</td><td>${{trailcamTemp}}</td><td>${{species}}</td><td>${{latin}}</td><td>${{speciesConf}}</td><td>${{taxonomy}}</td><td>${{shortTag}}</td><td>${{typeTag}}</td><td>${{manual}}</td><td>${{descSpecies}}</td><td>${{descDetector}}</td><td>${{jobId}}</td></tr>`;
   }}).join('');
   const summary = document.getElementById('exportPreviewSummary');
   if (summary) {{
-    summary.textContent = `Rows to export: ${{rows.length}}\\n${{mode}}\\nColumns include: species_label_latin, species_taxonomy_full, default_species_short, default_species_type, manual_tag\\nPreview shown: first ${{sample.length}} row(s) (setting: ${{previewCount}}).`;
+    summary.textContent = `Export rows: ${{rows.length}} (hide blanks: ${{hideBlanks ? 'ON' : 'OFF'}})\\nPreview: showing ${{sample.length}} of selected ${{previewCount}} row(s).`;
   }}
   const tableWrap = document.getElementById('exportPreviewTableWrap');
   if (tableWrap) {{
     tableWrap.innerHTML = `
       <table class="preview-table">
         <thead>
-          <tr><th>Video</th><th>Frame</th><th>Species</th><th>Latin</th><th>Taxonomy</th><th>Default Short</th><th>Default Type</th><th>Manual Tag</th></tr>
+          <tr><th>Video</th><th>Frame</th><th>Trail Date</th><th>Trail Time</th><th>Trail Temp (°C)</th><th>Species</th><th>Latin</th><th>Species Conf</th><th>Taxonomy</th><th>Default Short</th><th>Default Type</th><th>Manual Tag</th><th>Description Species</th><th>Description Detector</th><th>Job</th></tr>
         </thead>
         <tbody>
-          ${{tableRows || "<tr><td colspan='8'>No rows available with current filters.</td></tr>"}}
+          ${{tableRows || "<tr><td colspan='15'>No rows available with current filters.</td></tr>"}}
         </tbody>
       </table>
     `;
