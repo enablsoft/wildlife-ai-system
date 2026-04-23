@@ -326,6 +326,8 @@ def _extract_trailcam_overlay_fields(image_path: Path) -> dict[str, str]:
         cp = subprocess.run(
             [tesseract_bin, str(tmp), "stdout", "--psm", "6"],
             text=True,
+            encoding="utf-8",
+            errors="replace",
             capture_output=True,
             check=False,
         )

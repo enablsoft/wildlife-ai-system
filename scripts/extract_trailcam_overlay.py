@@ -40,6 +40,8 @@ def _ocr_with_tesseract(img_path: Path) -> str:
     cp = subprocess.run(
         [tesseract_bin, str(img_path), "stdout", "--psm", "6"],
         text=True,
+        encoding="utf-8",
+        errors="replace",
         capture_output=True,
         check=False,
     )

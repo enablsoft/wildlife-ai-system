@@ -500,12 +500,22 @@ function trailcamOverlayLabel(r) {{
   if (!r) return '';
   const d = String(r.overlay_date || '').trim();
   const t = String(r.overlay_time || '').trim();
-  const temp = String(r.overlay_temp || '').trim();
+  const tempRaw = String(r.overlay_temp || '').trim();
+  let temp = tempRaw;
+  const m = tempRaw.match(/^(-?\\d+)\\s*([CF])$/i);
+  if (m) temp = `${{m[1]}}\u00b0${{String(m[2]).toUpperCase()}}`;
   const bits = [];
   if (d) bits.push(d);
   if (t) bits.push(t);
   if (temp) bits.push(temp);
   return bits.join(' | ');
+}}
+function frameNumberLabel(frameName) {{
+  const s = String(frameName || '').trim();
+  const m = s.match(/_frame_(\\d+)/i);
+  if (!m) return '';
+  const n = String(m[1] || '').replace(/^0+/, '') || '0';
+  return `#${{n}}`;
 }}
 function openConfirmModal(message, opts = {{}}) {{
   return new Promise((resolve) => {{
@@ -1046,10 +1056,13 @@ function renderInlinePreview(r) {{
   const taxonomyRaw = fullTaxonomyLabel(r);
   const taxonomy = esc(taxonomyRaw);
   const overlay = esc(trailcamOverlayLabel(r));
-  const zoomTitle = `${{String(r.source || '').replace(/\\.[^.]+$/, '')}} - ${{r.frame || ''}}`;
+  const frameNo = frameNumberLabel(r.frame || '');
+  const frameNoEsc = esc(frameNo);
+  const zoomTitle = `${{String(r.frame || '')}} - ${{String(r.source || '')}}`;
   box.innerHTML = `
-    <div><b>${{esc(r.source)}}</b></div>
-    <div class='job-meta'>${{esc(r.frame)}} | ${{sp}}</div>
+    <div><b>${{esc(r.frame)}}</b>${{frameNo ? ` <span class='job-meta'>(${{frameNoEsc}})</span>` : ''}}</div>
+    <div class='job-meta'><b>Source:</b> ${{esc(r.source)}}</div>
+    <div class='job-meta'><b>Species:</b> ${{sp}}</div>
     ${{latin && !isBlankRecord(r) ? `<div class='job-meta'><b>Latin:</b> ${{latin}}</div>` : ''}}
     ${{taxonomyRaw && !isBlankRecord(r) && taxonomyRaw !== formatSpeciesLabel(r) ? `<div class='job-meta'><b>Taxonomy:</b> ${{taxonomy}}</div>` : ''}}
     ${{overlay ? `<div class='job-meta'><b>Trail-cam stamp:</b> ${{overlay}}</div>` : ''}}
