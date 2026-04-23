@@ -108,7 +108,6 @@ def export_frames_xlsx(
             "manual_tag",
             "description_species_context",
             "description_detector",
-            "annotated_rel",
             "job_id",
         ]
     )
@@ -137,12 +136,11 @@ def export_frames_xlsx(
                     + f" in {r.get('source', '')}, frame {r.get('frame', '')}."
                 ),
                 detector_desc,
-                r.get("annotated_rel", ""),
                 r.get("job_id", ""),
             ]
         )
     frames_ws.freeze_panes = "A2"
-    frames_ws.auto_filter.ref = f"A1:O{max(2, len(records) + 1)}"
+    frames_ws.auto_filter.ref = f"A1:N{max(2, len(records) + 1)}"
 
     videos_ws = wb.create_sheet("videos")
     videos_ws.append(["video_source", "frame_count", "distinct_species_count", "blank_frame_count"])
