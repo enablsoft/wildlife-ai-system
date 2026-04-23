@@ -19,11 +19,15 @@
 
 .PARAMETER AddressCodeQL
   When used with IncludeCodeQL, apply known local fix templates before printing alerts.
+
+.PARAMETER EnsureGh
+  Attempt to install GitHub CLI via winget when missing (default: enabled with IncludeCodeQL).
 #>
 param(
     [switch]$FailOnBehind,
     [switch]$IncludeCodeQL,
-    [switch]$AddressCodeQL
+    [switch]$AddressCodeQL,
+    [switch]$EnsureGh
 )
 
 $ErrorActionPreference = "Stop"
@@ -32,6 +36,30 @@ function Write-Section {
     param([string]$Message)
     Write-Host ""
     Write-Host "=== $Message ==="
+}
+
+function Ensure-GhCli {
+    if (Get-Command gh -ErrorAction SilentlyContinue) {
+        return $true
+    }
+    Write-Host "GitHub CLI (gh) not found."
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Write-Host "winget unavailable. Install GitHub CLI manually: https://cli.github.com/"
+        return $false
+    }
+    Write-Host "Attempting to install GitHub CLI via winget..."
+    winget install --id GitHub.cli -e --source winget --accept-package-agreements --accept-source-agreements | Out-Null
+    if (Get-Command gh -ErrorAction SilentlyContinue) {
+        Write-Host "GitHub CLI installed."
+        return $true
+    }
+    $ghPath = "C:\Program Files\GitHub CLI\gh.exe"
+    if (Test-Path $ghPath) {
+        Write-Host "GitHub CLI installed at $ghPath (new shells will pick it up on PATH)."
+        return $true
+    }
+    Write-Host "Failed to detect GitHub CLI after install attempt."
+    return $false
 }
 
 try {
@@ -84,6 +112,14 @@ try {
 
     if ($IncludeCodeQL) {
         Write-Section "GitHub CodeQL"
+        $canRunGh = $true
+        if ($EnsureGh -or $IncludeCodeQL) {
+            $canRunGh = Ensure-GhCli
+        }
+        if (-not $canRunGh) {
+            Write-Host "Skipping CodeQL query because GitHub CLI is unavailable."
+            return
+        }
         $analysisArgs = @("scripts/code_analysis_fix.py", "--skip-local-checks")
         if ($branch) {
             $analysisArgs += @("--branch", $branch)

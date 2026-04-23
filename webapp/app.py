@@ -29,6 +29,7 @@ from typing import Any
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from PIL import Image, ImageEnhance, ImageOps
 
 from webapp.export_utils import (
     export_frames_xlsx,
@@ -49,6 +50,7 @@ LOG_FILE = LOG_DIR / "webapp.log"
 
 db = create_jobs_db(DB_PATH)
 _stop_worker = False
+_trailcam_overlay_cache: dict[str, dict[str, str]] = {}
 
 
 @asynccontextmanager
@@ -285,6 +287,73 @@ def _normalize_tags_csv(raw: str) -> str:
     return ", ".join(out)
 
 
+def _resolve_tesseract_bin() -> str | None:
+    candidates = [
+        shutil.which("tesseract") or "",
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        str(Path.home() / "AppData" / "Local" / "Programs" / "Tesseract-OCR" / "tesseract.exe"),
+    ]
+    for c in candidates:
+        if c and Path(c).is_file():
+            return c
+    return None
+
+
+def _extract_trailcam_overlay_fields(image_path: Path) -> dict[str, str]:
+    key = str(image_path)
+    if key in _trailcam_overlay_cache:
+        return _trailcam_overlay_cache[key]
+    out = {"overlay_temp": "", "overlay_date": "", "overlay_time": ""}
+    if not image_path.is_file():
+        _trailcam_overlay_cache[key] = out
+        return out
+    tesseract_bin = _resolve_tesseract_bin()
+    if not tesseract_bin:
+        _trailcam_overlay_cache[key] = out
+        return out
+    try:
+        with Image.open(image_path).convert("RGB") as im:
+            w, h = im.size
+            y0 = max(0, int(h * 0.83))
+            footer = im.crop((0, y0, w, h)).convert("L")
+            footer = ImageEnhance.Contrast(footer).enhance(2.8)
+            footer = ImageEnhance.Sharpness(footer).enhance(2.0)
+            footer = ImageOps.autocontrast(footer)
+            footer = footer.point(lambda p: 255 if p > 128 else 0)
+            tmp = image_path.with_suffix(".ocr_tmp.png")
+            footer.save(tmp)
+        cp = subprocess.run(
+            [tesseract_bin, str(tmp), "stdout", "--psm", "6"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+        text = (cp.stdout or "") if cp.returncode == 0 else ""
+        tmatch = re.search(r"\b(-?\d{1,2})\s*([CF])\b", text, flags=re.IGNORECASE)
+        # OCR sometimes reads C as 0 in trail-cam stamps (e.g. "110" instead of "11C").
+        if not tmatch:
+            tmatch = re.search(r"\b(-?\d{1,2})0\b", text)
+            if tmatch:
+                out["overlay_temp"] = f"{tmatch.group(1)}C"
+        if tmatch and not out["overlay_temp"]:
+            out["overlay_temp"] = f"{tmatch.group(1)}{tmatch.group(2).upper()}"
+        dmatch = re.search(r"\b(\d{2}/\d{2}/\d{4})\b", text)
+        if dmatch:
+            out["overlay_date"] = dmatch.group(1)
+        timematch = re.search(r"\b(\d{1,2}:\d{2}\s*[AP]M)\b", text, flags=re.IGNORECASE)
+        if timematch:
+            out["overlay_time"] = re.sub(r"\s+", "", timematch.group(1).upper())
+    except Exception:
+        pass
+    _trailcam_overlay_cache[key] = out
+    return out
+
+
 def _frame_records(jobs: list[dict[str, object]]) -> list[dict[str, str]]:
     records: list[dict[str, str]] = []
     seen_ann: set[str] = set()
@@ -349,6 +418,7 @@ def _frame_records(jobs: list[dict[str, object]]) -> list[dict[str, str]]:
                 "species_short": species_short,
                 "species_latin": species_latin,
                 "species_type": _species_type_tag(species),
+                **_extract_trailcam_overlay_fields(Path(ann)),
             }
         )
 

@@ -152,7 +152,13 @@ The exact model version can vary by image tag (`ML_SERVICE_IMAGE`, `SPECIES_SERV
 - **Docker** and **Docker Compose** v2  
 - **Windows**: PowerShell for the scripts below  
 - **Optional**: [ffmpeg](https://ffmpeg.org/) on the host for video workflows (scripts may offer `winget` install on Windows)  
+- **Optional (CodeQL checks from scripts)**: GitHub CLI (`gh`)  
+- **Optional (trail-cam stamp OCR)**: Tesseract OCR (`tesseract`)  
 - **Python 3.10+** and a venv if you run the local web app (see [Local web app](#local-web-app))
+
+Notes:
+- `scripts/check-repo-state.ps1 -IncludeCodeQL` can auto-install `gh` via `winget` if missing.
+- OCR is used to read trail-cam footer stamp fields (temperature/date/time) from annotated images in the UI.
 
 ---
 
@@ -253,6 +259,7 @@ A **FastAPI** app in `webapp/` provides a browser UI for local processing (uploa
 - **Settings** tab: hide blanks + species label mode (short / latin / full taxonomy)  
 - Batch enqueue from a folder path; output browser and **Open folder** (OS) for completed jobs  
 - Excel export preview supports 5/10/20 row sample and includes latin + taxonomy columns before download
+- Trail-cam footer OCR (temperature/date/time) is shown in Frame Results, Media Frame Browser, and Inline Preview
 
 **Run**
 
@@ -325,9 +332,11 @@ It also auto-stops an existing local `uvicorn webapp.app:app` process on `127.0.
 
 | Script | Purpose |
 |--------|---------|
-| `.\scripts\test-local.ps1` | Process images in `test-media/input/` → write `*.ml.json` / `*.species.json` under `test-media/output/` |
+| `.\scripts\test-local.ps1` | Process images in `test-media/input/` → write `*.ml.json` / `*.species.json` under `test-media/output/`; preflight includes repo/local + GitHub CodeQL checks |
 | `.\scripts\test-video.ps1` | Extract frames from a video in `test-media/video/` into `test-media/input/`, then run `test-local.ps1` |
-| `.\scripts\code_analysis_fix.ps1` | Check GitHub code-scanning alerts, optionally apply known fixes, and run targeted local smoke checks |
+| `.\scripts\check-repo-state.ps1` | Check upstream sync + local changes; optional `-IncludeCodeQL` and `-AddressCodeQL` for GitHub CodeQL preflight/fix pass |
+| `.\scripts\code_analysis_fix.ps1` | Check GitHub CodeQL alerts, optionally apply known fixes, and run targeted local smoke checks |
+| `python .\scripts\extract_trailcam_overlay.py <image>` | OCR trail-cam footer and parse `temperature`, `date`, `time` |
 
 Supported image types: `.jpg`, `.jpeg`, `.png`, `.webp`. Video: `.mp4`, `.mov`, `.avi`, `.mkv`.
 
@@ -480,11 +489,33 @@ Run backend smoke tests with one command:
 Code-analysis smoke/fix workflow:
 
 ```powershell
+# Repo + local + CodeQL status
+.\scripts\check-repo-state.ps1 -IncludeCodeQL
+
+# Repo + local + CodeQL status, and apply known local fix templates first
+.\scripts\check-repo-state.ps1 -IncludeCodeQL -AddressCodeQL
+
 # Alerts only
 .\scripts\code_analysis_fix.ps1 -SkipLocalChecks
 
 # Alerts + auto-fix known patterns + local checks
 .\scripts\code_analysis_fix.ps1 -ApplyKnownFixes
+```
+
+`test-local.ps1` CodeQL options:
+
+```powershell
+# Default: preflight includes repo/local checks + CodeQL alert listing
+.\scripts\test-local.ps1
+
+# Also apply known CodeQL fix templates during preflight
+.\scripts\test-local.ps1 -AddressCodeQL
+```
+
+Trail-cam OCR helper:
+
+```powershell
+python .\scripts\extract_trailcam_overlay.py .\docs\images\sample.png
 ```
 
 Python test coverage for the code-analysis fix script:

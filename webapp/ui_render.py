@@ -496,6 +496,17 @@ function formatSpeciesLabel(r) {{
 function fullTaxonomyLabel(r) {{
   return String((r && r.species) || '').trim();
 }}
+function trailcamOverlayLabel(r) {{
+  if (!r) return '';
+  const d = String(r.overlay_date || '').trim();
+  const t = String(r.overlay_time || '').trim();
+  const temp = String(r.overlay_temp || '').trim();
+  const bits = [];
+  if (d) bits.push(d);
+  if (t) bits.push(t);
+  if (temp) bits.push(temp);
+  return bits.join(' | ');
+}}
 function openConfirmModal(message, opts = {{}}) {{
   return new Promise((resolve) => {{
     _confirmResolve = resolve;
@@ -1034,12 +1045,14 @@ function renderInlinePreview(r) {{
   const latin = esc(String(r.species_latin || latinSpeciesName(r.species || '') || ''));
   const taxonomyRaw = fullTaxonomyLabel(r);
   const taxonomy = esc(taxonomyRaw);
+  const overlay = esc(trailcamOverlayLabel(r));
   const zoomTitle = `${{String(r.source || '').replace(/\\.[^.]+$/, '')}} - ${{r.frame || ''}}`;
   box.innerHTML = `
     <div><b>${{esc(r.source)}}</b></div>
     <div class='job-meta'>${{esc(r.frame)}} | ${{sp}}</div>
     ${{latin && !isBlankRecord(r) ? `<div class='job-meta'><b>Latin:</b> ${{latin}}</div>` : ''}}
     ${{taxonomyRaw && !isBlankRecord(r) && taxonomyRaw !== formatSpeciesLabel(r) ? `<div class='job-meta'><b>Taxonomy:</b> ${{taxonomy}}</div>` : ''}}
+    ${{overlay ? `<div class='job-meta'><b>Trail-cam stamp:</b> ${{overlay}}</div>` : ''}}
     <img src="${{src}}" alt="frame preview" loading="lazy" />
     <div class='job-meta'>${{esc(r.description || '')}}</div>
     <div><button class='btn btn-subtle' type='button' onclick="openViewer('${{src}}','${{zoomTitle.replace(/'/g, "\\\\'")}}')">Open Zoom Viewer</button></div>
@@ -1093,10 +1106,12 @@ function renderVideoBrowser() {{
     const speciesText = esc(formatSpeciesLabel(r));
     const taxonomyRaw = fullTaxonomyLabel(r);
     const taxonomyText = esc(taxonomyRaw);
+    const overlay = esc(trailcamOverlayLabel(r));
     const taxonomyLine = (taxonomyRaw && !isBlankRecord(r) && taxonomyRaw !== formatSpeciesLabel(r))
       ? `<div class='job-meta'>Taxonomy: ${{taxonomyText}}</div>`
       : '';
-    return `<button class='frame-item${{active}}' type='button' data-src='${{src}}' data-id='${{esc(String(r.annotated_rel))}}' data-title='${{esc((r.source || '') + ' :: ' + (r.frame || ''))}}'><div>${{esc(String(r.frame))}} | ${{speciesText}}</div>${{taxonomyLine}}</button>`;
+    const overlayLine = overlay ? `<div class='job-meta'>Trail-cam: ${{overlay}}</div>` : '';
+    return `<button class='frame-item${{active}}' type='button' data-src='${{src}}' data-id='${{esc(String(r.annotated_rel))}}' data-title='${{esc((r.source || '') + ' :: ' + (r.frame || ''))}}'><div>${{esc(String(r.frame))}} | ${{speciesText}}</div>${{taxonomyLine}}${{overlayLine}}</button>`;
   }}).join('');
   fList.querySelectorAll('.frame-item').forEach((btn) => {{
     btn.addEventListener('click', () => {{
@@ -1245,6 +1260,7 @@ function renderResultsBodyFromRecords() {{
     const latin = String(r.species_latin || latinSpeciesName(r.species || '') || '');
     const taxonomyRaw = fullTaxonomyLabel(r);
     const taxonomy = esc(taxonomyRaw);
+    const overlay = esc(trailcamOverlayLabel(r));
     const isBlank = isBlankRecord(r);
     const searchBlob = (
       String(r.source || '') + ' '
@@ -1265,6 +1281,7 @@ function renderResultsBodyFromRecords() {{
       : '';
     const latinHtml = (latin && !isBlank) ? `<div><b>Latin:</b> ${{esc(latin)}}</div>` : '';
     const taxonomyHtml = (taxonomyRaw && !isBlank && taxonomyRaw !== speciesDisp) ? `<div><b>Taxonomy:</b> ${{taxonomy}}</div>` : '';
+    const overlayHtml = overlay ? `<div><b>Trail-cam stamp:</b> ${{overlay}}</div>` : '';
     const rel = String(r.annotated_rel || '');
     const relJs = JSON.stringify(rel);
     const inputJs = JSON.stringify(String(r.input_abs || ''));
@@ -1277,7 +1294,7 @@ function renderResultsBodyFromRecords() {{
       + `<div><b>Video:</b> ${{esc(String(r.source || ''))}}</div>`
       + `<div><b>Frame:</b> ${{esc(String(r.frame || ''))}}</div>`
       + `<div><b>Species:</b> ${{esc(String(speciesDisp || '—'))}}</div>`
-      + latinHtml + taxonomyHtml + defaultHtml + manualHtml
+      + latinHtml + taxonomyHtml + overlayHtml + defaultHtml + manualHtml
       + `<div class='desc-col' title='${{esc(String(r.description || ''))}}'>${{esc(String(r.description || ''))}}</div>`
       + `<div style='margin-top:4px' class='actions'><button class='btn btn-subtle' type='button' onclick='editManualTag(${{relJs}})'>Edit tag</button><button class='btn btn-subtle' type='button' onclick='rerunFrame(${{inputJs}}, ${{jobJs}})'>Re-run frame</button></div>`
       + "</div></div>"

@@ -220,6 +220,7 @@ test-media/input/*.webp
 test-media/output/*/*.ml.json
 test-media/output/*/*.species.json
 test-media/output/*/*.annotated.jpg
+test-media/output/*/*.annotated.*.png
 
 backups/
 logs/
