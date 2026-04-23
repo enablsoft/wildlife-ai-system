@@ -658,6 +658,14 @@ async function rerunFrame(inputPath, jobId) {{
 function esc(s) {{
   return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;');
 }}
+function formatConfidencePercent(raw) {{
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  const n = Number(s);
+  if (!Number.isFinite(n)) return s;
+  const pct = n <= 1 ? n * 100 : n;
+  return `${{pct.toFixed(1)}}%`;
+}}
 async function previewEnqueueFolder() {{
   const folder = document.getElementById('enqueueFolderPath')?.value || '';
   if (!(await ensureBatchOutputChoice(folder))) return;
@@ -970,7 +978,7 @@ async function previewExcelExport() {{
     const species = esc(formatSpeciesLabel(r));
     const latinRaw = String(r.species_latin || latinSpeciesName(r.species || '') || '');
     const latin = esc(latinRaw);
-    const speciesConfRaw = String(r.species_confidence || '');
+    const speciesConfRaw = formatConfidencePercent(r.species_confidence || '');
     const speciesConf = esc(speciesConfRaw);
     const taxonomy = esc(String(r.species || ''));
     const shortTag = esc(String(r.species_short || ''));
@@ -997,7 +1005,7 @@ async function previewExcelExport() {{
     tableWrap.innerHTML = `
       <table class="preview-table">
         <thead>
-          <tr><th>Video</th><th>Frame</th><th>Trail Date</th><th>Trail Time</th><th>Trail Temp (°C)</th><th>Species</th><th>Latin</th><th>Species Conf</th><th>Taxonomy</th><th>Default Short</th><th>Default Type</th><th>Manual Tag</th><th>Species Context</th><th>Detector Summary</th><th>Job</th></tr>
+          <tr><th>Video</th><th>Frame</th><th>Trail Date</th><th>Trail Time</th><th>Trail Temp (°C)</th><th>Species</th><th>Latin</th><th>Species Conf (%)</th><th>Taxonomy</th><th>Default Short</th><th>Default Type</th><th>Manual Tag</th><th>Species Context</th><th>Detector Summary</th><th>Job</th></tr>
         </thead>
         <tbody>
           ${{tableRows || "<tr><td colspan='15'>No rows available with current filters.</td></tr>"}}

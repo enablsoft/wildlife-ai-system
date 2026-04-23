@@ -79,6 +79,20 @@ def format_trailcam_temp(temp_raw: str) -> str:
     return upper.strip()
 
 
+def format_confidence_percent(conf_raw: str) -> str:
+    """Normalize confidence score text to percentage display."""
+    raw = str(conf_raw or "").strip()
+    if not raw:
+        return ""
+    try:
+        val = float(raw)
+    except Exception:
+        return raw
+    if val <= 1.0:
+        val *= 100.0
+    return f"{val:.1f}%"
+
+
 def export_frames_xlsx(
     records: list[dict[str, str]],
     hide_blanks: bool,
@@ -101,7 +115,7 @@ def export_frames_xlsx(
             "trail_cam_temp_(°C)",
             "species_label_short",
             "species_label_latin",
-            "species_confidence",
+            "species_confidence_(%)",
             "default_species_short",
             "default_species_type",
             "species_taxonomy_full",
@@ -124,7 +138,7 @@ def export_frames_xlsx(
                 format_trailcam_temp(r.get("overlay_temp", "")),
                 short_species_label(r.get("species", ""), r.get("description", "")),
                 r.get("species_latin", ""),
-                r.get("species_confidence", ""),
+                format_confidence_percent(r.get("species_confidence", "")),
                 r.get("species_short", ""),
                 r.get("species_type", ""),
                 r.get("species", ""),
@@ -134,7 +148,11 @@ def export_frames_xlsx(
                     for p in [
                         f"Likely {short_species_label(r.get('species', ''), r.get('description', ''))}",
                         f"({r.get('species_latin', '')})" if r.get("species_latin", "") else "",
-                        f"- confidence {r.get('species_confidence', '')}" if r.get("species_confidence", "") else "",
+                        (
+                            f"- confidence {format_confidence_percent(r.get('species_confidence', ''))}"
+                            if r.get("species_confidence", "")
+                            else ""
+                        ),
                     ]
                     if p
                 ),
