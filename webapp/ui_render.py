@@ -1033,7 +1033,7 @@ function attachImageClickHandlers() {{
   document.querySelectorAll('#resultsBody img.thumb').forEach((img) => {{
     const src = img.getAttribute('src') || '';
     const card = img.closest('.result-card');
-    const title = card ? (card.querySelector('.result-text')?.textContent || 'Frame') : 'Frame';
+    const title = card ? (card.getAttribute('data-viewer-title') || 'Frame') : 'Frame';
     img.style.cursor = 'zoom-in';
     img.addEventListener('click', (e) => {{
       e.preventDefault();
@@ -1300,7 +1300,7 @@ function renderResultsBodyFromRecords() {{
     const inputJs = JSON.stringify(String(r.input_abs || ''));
     const jobJs = JSON.stringify(String(r.job_id || ''));
     return (
-      `<div class='result-card result-row' data-is-blank='${{isBlank ? '1' : '0'}}' data-tags='${{esc(tagsNorm)}}' data-search='${{esc(searchBlob)}}'>`
+      `<div class='result-card result-row' data-viewer-title='${{esc(String(r.source || ''))}} - ${{esc(String(r.frame || ''))}}' data-is-blank='${{isBlank ? '1' : '0'}}' data-tags='${{esc(tagsNorm)}}' data-search='${{esc(searchBlob)}}'>`
       + `<div><a href='/files/${{rel}}' target='_blank'><img src='/files/${{rel}}' class='thumb' onerror="this.onerror=null;this.replaceWith(document.createTextNode('Image removed'))"/></a></div>`
       + "<div class='result-text'>"
       + `<div><b>Job:</b> #${{esc(String(r.job_id || ''))}}</div>`
