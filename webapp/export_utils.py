@@ -129,11 +129,14 @@ def export_frames_xlsx(
                 r.get("species_type", ""),
                 r.get("species", ""),
                 r.get("manual_tag", ""),
-                (
-                    f"Likely {short_species_label(r.get('species', ''), r.get('description', ''))}"
-                    + (f" ({r.get('species_latin', '')})" if r.get("species_latin", "") else "")
-                    + (f" ({r.get('species_confidence', '')})" if r.get("species_confidence", "") else "")
-                    + f" in {r.get('source', '')}, frame {r.get('frame', '')}."
+                " ".join(
+                    p
+                    for p in [
+                        f"Likely {short_species_label(r.get('species', ''), r.get('description', ''))}",
+                        f"({r.get('species_latin', '')})" if r.get("species_latin", "") else "",
+                        f"- confidence {r.get('species_confidence', '')}" if r.get("species_confidence", "") else "",
+                    ]
+                    if p
                 ),
                 detector_desc,
                 r.get("job_id", ""),
