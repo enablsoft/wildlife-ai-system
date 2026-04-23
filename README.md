@@ -327,6 +327,7 @@ It also auto-stops an existing local `uvicorn webapp.app:app` process on `127.0.
 |--------|---------|
 | `.\scripts\test-local.ps1` | Process images in `test-media/input/` → write `*.ml.json` / `*.species.json` under `test-media/output/` |
 | `.\scripts\test-video.ps1` | Extract frames from a video in `test-media/video/` into `test-media/input/`, then run `test-local.ps1` |
+| `.\scripts\code_analysis_fix.ps1` | Check GitHub code-scanning alerts, optionally apply known fixes, and run targeted local smoke checks |
 
 Supported image types: `.jpg`, `.jpeg`, `.png`, `.webp`. Video: `.mp4`, `.mov`, `.avi`, `.mkv`.
 
@@ -474,6 +475,22 @@ Run backend smoke tests with one command:
 
 ```powershell
 .\scripts\test-backends.ps1
+```
+
+Code-analysis smoke/fix workflow:
+
+```powershell
+# Alerts only
+.\scripts\code_analysis_fix.ps1 -SkipLocalChecks
+
+# Alerts + auto-fix known patterns + local checks
+.\scripts\code_analysis_fix.ps1 -ApplyKnownFixes
+```
+
+Python test coverage for the code-analysis fix script:
+
+```powershell
+python -m pytest tests/test_code_analysis_fix.py -q
 ```
 
 Bi-directional migration helper (Mongo -> SQLite):

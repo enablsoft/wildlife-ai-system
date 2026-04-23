@@ -329,6 +329,65 @@ def register_api_routes(
         j = db.get_job(int(body.job_id))
         if not j:
             return JSONResponse({"ok": False, "error": "Job not found."}, status_code=404)
+
+        # Only allow rerun for frames already associated with this job.
+        allowed_inputs: set[Path] = set()
+        raw_outputs = j.get("outputs_json")
+        if raw_outputs:
+            try:
+                outputs = json.loads(str(raw_outputs))
+            except Exception:
+                outputs = []
+            if isinstance(outputs, list):
+                for row in outputs:
+                    if not isinstance(row, dict):
+                        continue
+                    p_in = str(row.get("input") or "").strip()
+                    if not p_in:
+                        continue
+                    try:
+                        allowed_inputs.add(Path(p_in).resolve(strict=False))
+                    except Exception:
+                        continue
+        resolved_input = resolved.resolve(strict=False)
+        if not allowed_inputs:
+            # Single-image jobs may not have outputs_json populated yet in some test/migration states.
+            raw_job_input = str(j.get("input_path") or "").strip()
+            if raw_job_input:
+                try:
+                    job_input_resolved = Path(raw_job_input).resolve(strict=False)
+                except Exception:
+                    job_input_resolved = None
+                if job_input_resolved is not None:
+                    allowed_inputs.add(job_input_resolved)
+            if not allowed_inputs:
+                repo_root = Path(__file__).resolve().parents[1]
+                runtime_roots_raw = [
+                    db.get_control("runtime_input_dir", str(repo_root / "test-media" / "input")),
+                    db.get_control("runtime_video_dir", str(repo_root / "test-media" / "video")),
+                    db.get_control("runtime_output_dir", str(repo_root / "test-media" / "output")),
+                ]
+                for root_raw in runtime_roots_raw:
+                    try:
+                        root_resolved = Path(str(root_raw)).resolve(strict=False)
+                    except Exception:
+                        continue
+                    try:
+                        within_root = os.path.commonpath(
+                            [os.path.normcase(str(resolved_input)), os.path.normcase(str(root_resolved))]
+                        ) == os.path.normcase(str(root_resolved))
+                    except ValueError:
+                        within_root = False
+                    if within_root:
+                        allowed_inputs.add(resolved_input)
+                        break
+        if not allowed_inputs:
+            return JSONResponse(
+                {"ok": False, "error": "No recorded frames found for this job yet."},
+                status_code=409,
+            )
+        if resolved_input not in allowed_inputs:
+            return JSONResponse({"ok": False, "error": "Frame is not part of this job."}, status_code=403)
         out_dir_raw = str(j.get("output_dir") or "").strip()
         if out_dir_raw:
             out_dir = Path(out_dir_raw)

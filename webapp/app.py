@@ -810,12 +810,9 @@ async def process(
 ) -> HTMLResponse:
     jid, err = _enqueue_uploaded_file(media, fps=fps, ml_url=ml_url, species_url=species_url)
     if err:
-        return RedirectResponse(url=f"/?msg={quote_plus(err)}", status_code=303)
+        return RedirectResponse(url="/", status_code=303)
     if jid < 0:
-        return RedirectResponse(
-            url=f"/?msg={quote_plus(f'Already exists as job #{abs(jid)} for file: {media.filename}. Clear jobs or retry existing.')}",
-            status_code=303,
-        )
+        return RedirectResponse(url="/", status_code=303)
     return RedirectResponse(url="/", status_code=303)
 
 
@@ -839,10 +836,7 @@ async def process_multi(
             skipped += 1
         else:
             queued += 1
-    return RedirectResponse(
-        url=f"/?msg={quote_plus(f'Queued {queued} file(s), skipped {skipped}, unsupported/missing {bad}.')}",
-        status_code=303,
-    )
+    return RedirectResponse(url="/", status_code=303)
 
 
 @app.get("/pause")
@@ -877,7 +871,7 @@ async def cancel(job_id: int) -> RedirectResponse:
 async def pause_job(job_id: int) -> RedirectResponse:
     db.cancel_job(job_id)
     logger.info("job_id=%s action=pause_job", job_id)
-    return RedirectResponse(url=f"/?msg={quote_plus(f'Paused job #{job_id}.')}", status_code=303)
+    return RedirectResponse(url="/", status_code=303)
 
 
 @app.get("/continue-job/{job_id}")
@@ -885,34 +879,28 @@ async def continue_job(job_id: int) -> RedirectResponse:
     job = db.get_job(job_id)
     status = str((job or {}).get("status") or "")
     if status == "running":
-        return RedirectResponse(
-            url=f"/?msg={quote_plus(f'Job #{job_id} is still stopping. Wait a moment, then press Continue again.')}",
-            status_code=303,
-        )
+        return RedirectResponse(url="/", status_code=303)
     if status == "queued":
-        return RedirectResponse(url=f"/?msg={quote_plus(f'Job #{job_id} is already queued.')}", status_code=303)
+        return RedirectResponse(url="/", status_code=303)
     db.resume_job(job_id)
     logger.info("job_id=%s action=continue_job_resume", job_id)
-    return RedirectResponse(url=f"/?msg={quote_plus(f'Continuing job #{job_id} from saved progress.')}", status_code=303)
+    return RedirectResponse(url="/", status_code=303)
 
 
 @app.get("/cancel-all")
 async def cancel_all() -> RedirectResponse:
     n = db.cancel_all_active()
     logger.info("cancel_all affected=%s", n)
-    return RedirectResponse(url=f"/?msg={quote_plus(f'Cancelled {n} active job(s).')}", status_code=303)
+    return RedirectResponse(url="/", status_code=303)
 
 
 @app.get("/clear-jobs")
 async def clear_jobs() -> RedirectResponse:
     if db.has_running_jobs():
-        return RedirectResponse(
-            url=f"/?msg={quote_plus('Cannot clear while a job is running. Cancel all first and wait a moment.')}",
-            status_code=303,
-        )
+        return RedirectResponse(url="/", status_code=303)
     n = db.clear_all_jobs()
     logger.info("clear_jobs removed=%s", n)
-    return RedirectResponse(url=f"/?msg={quote_plus(f'Cleared {n} job record(s).')}", status_code=303)
+    return RedirectResponse(url="/", status_code=303)
 
 
 @app.get("/reset-all")
@@ -942,10 +930,7 @@ async def reset_all() -> RedirectResponse:
     _ensure_dir_gitkeep(video_dir)
     removed = db.clear_all_jobs()
     logger.info("reset_all cancelled=%s cleared=%s", cancelled, removed)
-    return RedirectResponse(
-        url=f"/?msg={quote_plus(f'Reset complete. Cancelled {cancelled} active job(s), cleared {removed} jobs, and removed generated files.')}",
-        status_code=303,
-    )
+    return RedirectResponse(url="/", status_code=303)
 
 
 def _same_origin_referer_or(request: Request, default: str = "/") -> str:
@@ -1111,8 +1096,4 @@ async def reset_generated_media() -> RedirectResponse:
         removed_in,
         removed_vid,
     )
-    msg = (
-        f"Reset generated media complete. Removed {removed_out} output folder(s), "
-        f"{removed_in} input file(s), and {removed_vid} video file(s). SQL job history was not changed."
-    )
-    return RedirectResponse(url=f"/?msg={quote_plus(msg)}", status_code=303)
+    return RedirectResponse(url="/", status_code=303)
