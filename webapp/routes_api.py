@@ -314,16 +314,6 @@ def register_api_routes(
         raw_path = (body.input_path or "").strip()
         if not raw_path:
             return JSONResponse({"ok": False, "error": "input_path is required"}, status_code=400)
-        p = Path(raw_path)
-        try:
-            resolved = p.resolve(strict=True)
-        except Exception:
-            return JSONResponse({"ok": False, "error": "Input frame not found."}, status_code=400)
-        if not resolved.is_file():
-            return JSONResponse({"ok": False, "error": "Input path must be a file."}, status_code=400)
-        if resolved.suffix.lower() not in (".jpg", ".jpeg", ".png", ".webp"):
-            return JSONResponse({"ok": False, "error": "Only image frames can be re-run."}, status_code=400)
-
         if not body.job_id:
             return JSONResponse({"ok": False, "error": "job_id is required for in-place frame rerun."}, status_code=400)
         j = db.get_job(int(body.job_id))
@@ -349,7 +339,6 @@ def register_api_routes(
                         allowed_inputs.add(Path(p_in).resolve(strict=False))
                     except Exception:
                         continue
-        resolved_input = resolved.resolve(strict=False)
         if not allowed_inputs:
             # Single-image jobs may not have outputs_json populated yet in some test/migration states.
             raw_job_input = str(j.get("input_path") or "").strip()
@@ -360,34 +349,25 @@ def register_api_routes(
                     job_input_resolved = None
                 if job_input_resolved is not None:
                     allowed_inputs.add(job_input_resolved)
-            if not allowed_inputs:
-                repo_root = Path(__file__).resolve().parents[1]
-                runtime_roots_raw = [
-                    db.get_control("runtime_input_dir", str(repo_root / "test-media" / "input")),
-                    db.get_control("runtime_video_dir", str(repo_root / "test-media" / "video")),
-                    db.get_control("runtime_output_dir", str(repo_root / "test-media" / "output")),
-                ]
-                for root_raw in runtime_roots_raw:
-                    try:
-                        root_resolved = Path(str(root_raw)).resolve(strict=False)
-                    except Exception:
-                        continue
-                    try:
-                        within_root = os.path.commonpath(
-                            [os.path.normcase(str(resolved_input)), os.path.normcase(str(root_resolved))]
-                        ) == os.path.normcase(str(root_resolved))
-                    except ValueError:
-                        within_root = False
-                    if within_root:
-                        allowed_inputs.add(resolved_input)
-                        break
         if not allowed_inputs:
             return JSONResponse(
                 {"ok": False, "error": "No recorded frames found for this job yet."},
                 status_code=409,
             )
-        if resolved_input not in allowed_inputs:
+
+        requested_norm = os.path.normcase(os.path.normpath(os.path.expanduser(raw_path)))
+        allowed_by_norm = {os.path.normcase(os.path.normpath(str(candidate))): candidate for candidate in allowed_inputs}
+        matched_input = allowed_by_norm.get(requested_norm)
+        if matched_input is None:
             return JSONResponse({"ok": False, "error": "Frame is not part of this job."}, status_code=403)
+        try:
+            resolved = matched_input.resolve(strict=True)
+        except Exception:
+            return JSONResponse({"ok": False, "error": "Input frame not found."}, status_code=400)
+        if not resolved.is_file():
+            return JSONResponse({"ok": False, "error": "Input path must be a file."}, status_code=400)
+        if resolved.suffix.lower() not in (".jpg", ".jpeg", ".png", ".webp"):
+            return JSONResponse({"ok": False, "error": "Only image frames can be re-run."}, status_code=400)
         out_dir_raw = str(j.get("output_dir") or "").strip()
         if out_dir_raw:
             out_dir = Path(out_dir_raw)

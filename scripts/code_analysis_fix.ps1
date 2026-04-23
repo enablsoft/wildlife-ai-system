@@ -3,7 +3,7 @@
   Code analysis smoke test for GitHub alerts and local checks.
 
 .DESCRIPTION
-  - Fetches open GitHub code-scanning alerts via gh CLI
+  - Fetches open GitHub CodeQL alerts via gh CLI
   - Optionally applies known local fixes for recurring CodeQL patterns
   - Runs critical flake8 checks and targeted pytest smoke tests
 
@@ -23,6 +23,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path -Parent $PSScriptRoot)
+Write-Host "Preflight: checking remote and local repo status..."
+& "$PSScriptRoot\check-repo-state.ps1"
 
 $argsList = @("scripts/code_analysis_fix.py")
 if ($Repo) { $argsList += @("--repo", $Repo) }

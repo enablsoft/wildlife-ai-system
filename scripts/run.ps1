@@ -16,6 +16,8 @@ param(
 # --- Setup ---
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path -Parent $PSScriptRoot)
+Write-Host "Preflight: checking remote and local repo status..."
+& "$PSScriptRoot\check-repo-state.ps1"
 
 # So values in .env are not overridden by stray shell env (Compose prefers shell over --env-file).
 foreach ($k in @("ML_SERVICE_IMAGE", "BATCH_UI_IMAGE", "SPECIES_SERVICE_IMAGE")) {

@@ -28,7 +28,7 @@ def test_main_skip_local_checks(monkeypatch, capsys) -> None:
     out = capsys.readouterr().out
     assert rc == 0
     assert "Repository: enablsoft/wildlife-ai-system" in out
-    assert "No open code-scanning alerts." in out
+    assert "No open GitHub CodeQL alerts." in out
 
 
 def test_apply_known_fixes_updates_expected_patterns(tmp_path: Path) -> None:

@@ -10,6 +10,8 @@
 # --- Setup ---
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path -Parent $PSScriptRoot)
+Write-Host "Preflight: checking remote and local repo status..."
+& "$PSScriptRoot\check-repo-state.ps1"
 
 function Ensure-Ffmpeg {
     # Best-effort auto-install path for Windows machines.

@@ -76,11 +76,6 @@ def test_ui_backend_api_endpoints_work(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(app_module.db, "get_control", lambda k, d="": controls.get(k, d))
     monkeypatch.setattr(app_module.db, "list_all_jobs", lambda: [])
     monkeypatch.setattr(app_module.db, "latest_job_for_input", lambda _p, _t: None)
-    monkeypatch.setattr(
-        app_module.db,
-        "get_job",
-        lambda _job_id: {"ml_url": "http://127.0.0.1:8010", "species_url": "http://127.0.0.1:8100"},
-    )
     monkeypatch.setattr(app_module.db, "upsert_output_row", lambda _job_id, _row: None)
     monkeypatch.setattr(app_module.db, "append_log", lambda _job_id, _line: None)
     monkeypatch.setattr(app_module.db, "set_output_dir", lambda _job_id, _path: None)
@@ -110,6 +105,15 @@ def test_ui_backend_api_endpoints_work(monkeypatch, tmp_path: Path) -> None:
     folder.mkdir(parents=True, exist_ok=True)
     image = folder / "DeMo.JPG"
     image.write_bytes(b"jpg")
+    monkeypatch.setattr(
+        app_module.db,
+        "get_job",
+        lambda _job_id: {
+            "ml_url": "http://127.0.0.1:8010",
+            "species_url": "http://127.0.0.1:8100",
+            "input_path": str(image),
+        },
+    )
 
     client = TestClient(app_module.app)
 

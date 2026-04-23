@@ -5,11 +5,19 @@
 .DESCRIPTION
   Read test images from `test-media/input` and write service responses to
   `test-media/output` as JSON files for quick inspection.
+
+.PARAMETER AddressCodeQL
+  Include GitHub CodeQL in preflight and apply known local fix templates first.
 #>
+param(
+    [switch]$AddressCodeQL
+)
 
 # --- Setup + env ---
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path -Parent $PSScriptRoot)
+Write-Host "Preflight: checking remote and local repo status..."
+& "$PSScriptRoot\check-repo-state.ps1" -IncludeCodeQL -AddressCodeQL:$AddressCodeQL
 
 if (-not (Test-Path ".env")) {
     Copy-Item ".env.example" ".env"

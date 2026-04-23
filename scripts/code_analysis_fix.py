@@ -3,15 +3,35 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 
+def _resolve_executable(name: str) -> str:
+    if name != "gh":
+        return name
+    found = shutil.which("gh")
+    if found:
+        return found
+    win_candidates = [
+        r"C:\Program Files\GitHub CLI\gh.exe",
+        r"C:\Program Files (x86)\GitHub CLI\gh.exe",
+    ]
+    for candidate in win_candidates:
+        if Path(candidate).exists():
+            return candidate
+    return name
+
+
 def run(cmd: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, cwd=str(cwd), text=True, capture_output=True, check=False)
+    resolved = list(cmd)
+    resolved[0] = _resolve_executable(resolved[0])
+    return subprocess.run(resolved, cwd=str(cwd), text=True, capture_output=True, check=False)
 
 
 def get_repo_slug(repo_root: Path, explicit_slug: str | None) -> str:
@@ -34,26 +54,44 @@ def get_repo_slug(repo_root: Path, explicit_slug: str | None) -> str:
 
 
 def fetch_open_alerts(repo_root: Path, repo_slug: str) -> list[dict[str, Any]]:
-    cp = run(
-        ["gh", "api", f"repos/{repo_slug}/code-scanning/alerts?state=open&per_page=100"],
-        repo_root,
-    )
-    if cp.returncode != 0:
-        raise RuntimeError(cp.stderr.strip() or cp.stdout.strip() or "gh api call failed")
-    try:
-        data = json.loads(cp.stdout)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Failed to parse alert JSON: {exc}") from exc
-    if not isinstance(data, list):
-        raise RuntimeError("Unexpected API response shape from code-scanning alerts endpoint.")
-    return data
+    all_alerts: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        cp = run(
+            [
+                "gh",
+                "api",
+                f"repos/{repo_slug}/code-scanning/alerts?state=open&tool_name=CodeQL&per_page=100&page={page}",
+            ],
+            repo_root,
+        )
+        if cp.returncode != 0:
+            raise RuntimeError(cp.stderr.strip() or cp.stdout.strip() or "gh api call failed")
+        try:
+            page_data = json.loads(cp.stdout)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Failed to parse alert JSON: {exc}") from exc
+        if not isinstance(page_data, list):
+            raise RuntimeError("Unexpected API response shape from code-scanning alerts endpoint.")
+        all_alerts.extend(page_data)
+        if len(page_data) < 100:
+            break
+        page += 1
+    return all_alerts
+
+
+def get_default_branch(repo_root: Path) -> str:
+    probe = run(["gh", "repo", "view", "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name"], repo_root)
+    if probe.returncode == 0 and probe.stdout.strip():
+        return probe.stdout.strip()
+    return os.environ.get("GITHUB_DEFAULT_BRANCH", "main")
 
 
 def print_alert_summary(alerts: list[dict[str, Any]]) -> None:
     if not alerts:
-        print("No open code-scanning alerts.")
+        print("No open GitHub CodeQL alerts.")
         return
-    print(f"Open code-scanning alerts: {len(alerts)}")
+    print(f"Open GitHub CodeQL alerts: {len(alerts)}")
     for a in sorted(alerts, key=lambda x: int(x.get("number", 0))):
         n = a.get("number")
         rule = (a.get("rule") or {}).get("id", "unknown")
@@ -149,6 +187,11 @@ def main() -> int:
         description="Code analysis smoke test: check GitHub alerts and optionally apply known local fixes."
     )
     parser.add_argument("--repo", help="GitHub repo slug in owner/name form. Auto-detected if omitted.")
+    parser.add_argument(
+        "--branch",
+        default="",
+        help="Branch name for filtering alert display (default: repo default branch).",
+    )
     parser.add_argument("--apply-known-fixes", action="store_true", help="Apply known local patch templates.")
     parser.add_argument("--skip-local-checks", action="store_true", help="Skip flake8 and pytest smoke checks.")
     args = parser.parse_args()
@@ -157,12 +200,20 @@ def main() -> int:
     try:
         slug = get_repo_slug(repo_root, args.repo)
         alerts = fetch_open_alerts(repo_root, slug)
+        branch = args.branch.strip() or get_default_branch(repo_root)
     except Exception as exc:
         print(f"ERROR: {exc}")
+        print("Hint: ensure GitHub CLI is installed and authenticated (`gh auth login`).")
         return 2
 
     print(f"Repository: {slug}")
-    print_alert_summary(alerts)
+    print(f"Branch filter: {branch}")
+    filtered = [
+        a
+        for a in alerts
+        if str((((a.get("most_recent_instance") or {}).get("ref")) or "")).endswith(f"/{branch}")
+    ]
+    print_alert_summary(filtered)
 
     if args.apply_known_fixes:
         apply_known_fixes(repo_root)
