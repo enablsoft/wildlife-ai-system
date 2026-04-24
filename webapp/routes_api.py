@@ -92,17 +92,17 @@ def register_api_routes(
         except Exception:
             return None, "Runtime video folder is unavailable."
 
-        # Restrict folder input to relative paths under runtime_video_dir.
+        # Restrict folder input to runtime_video_dir (relative or in-root absolute).
         expanded = os.path.expanduser(raw)
-        if os.path.isabs(expanded):
-            return None, "Folder path must be relative to runtime video folder."
-        normalized_rel = os.path.normpath(expanded)
-        # Reject traversal and Windows drive-qualified segments.
-        if normalized_rel.startswith("..") or normalized_rel == "." or ":" in normalized_rel:
-            return None, "Invalid folder path."
-
         video_root_real_str = os.path.realpath(str(video_root_real))
-        candidate_str = os.path.realpath(os.path.join(video_root_real_str, normalized_rel))
+        if os.path.isabs(expanded):
+            candidate_str = os.path.realpath(expanded)
+        else:
+            normalized_rel = os.path.normpath(expanded)
+            # Reject traversal and Windows drive-qualified segments.
+            if normalized_rel.startswith("..") or ":" in normalized_rel:
+                return None, "Invalid folder path."
+            candidate_str = os.path.realpath(os.path.join(video_root_real_str, normalized_rel))
         root_prefix = os.path.join(video_root_real_str, "")
         if not candidate_str.startswith(root_prefix):
             return None, f"Folder must be inside runtime video folder: {video_root_real}"
