@@ -32,6 +32,7 @@ class EnqueueFolderCommitIn(BaseModel):
     fps: float = 1.0
     ml_url: str = "http://127.0.0.1:8010"
     species_url: str = "http://127.0.0.1:8100"
+    output_dir_override: str = ""
     input_paths: list[str] = Field(default_factory=list)
 
 
@@ -80,33 +81,11 @@ def register_api_routes(
         if not raw:
             return None, "Folder path is required."
         repo_root = Path(__file__).resolve().parents[1]
-        default_video_root = (repo_root / "test-media" / "video").resolve(strict=False)
-        raw_video_root = db.get_control("runtime_video_dir", str(default_video_root))
-        try:
-            video_root = Path(raw_video_root).expanduser().resolve(strict=False)
-        except Exception:
-            video_root = default_video_root
-
-        # Normalize user input to a safe relative path rooted at runtime video folder.
         expanded = os.path.expanduser(raw)
         normalized_input = os.path.normpath(expanded)
-        video_root_norm = os.path.normpath(str(video_root))
-
-        if os.path.isabs(normalized_input):
-            try:
-                within_video_root = os.path.commonpath([normalized_input, video_root_norm]) == video_root_norm
-            except ValueError:
-                within_video_root = False
-            if not within_video_root:
-                return None, f"Folder must be inside runtime video folder: {video_root}"
-            relative_input = os.path.relpath(normalized_input, video_root_norm)
-        else:
-            relative_input = normalized_input
-
-        parts = [p for p in relative_input.replace("\\", "/").split("/") if p not in ("", ".")]
-        if any(p == ".." for p in parts):
-            return None, "Folder path cannot navigate outside runtime video folder."
-        candidate = video_root.joinpath(*parts).resolve(strict=False)
+        candidate = Path(normalized_input)
+        if not candidate.is_absolute():
+            candidate = (repo_root / candidate).resolve(strict=False)
 
         try:
             resolved = candidate.resolve(strict=True)
@@ -114,14 +93,6 @@ def register_api_routes(
             return None, "Folder not found."
         if not resolved.is_dir():
             return None, "Folder path must be a directory."
-        resolved_norm = os.path.normcase(str(resolved))
-        video_root_norm = os.path.normcase(str(video_root))
-        try:
-            within_video_root = os.path.commonpath([resolved_norm, video_root_norm]) == video_root_norm
-        except ValueError:
-            within_video_root = False
-        if not within_video_root:
-            return None, f"Folder must be inside runtime video folder: {video_root}"
         return resolved, None
 
     @app.post("/api/settings/runtime")
@@ -210,6 +181,14 @@ def register_api_routes(
         except Exception:
             logger.exception("enqueue_folder_commit_failed folder=%s", p)
             return JSONResponse({"ok": False, "error": "Unable to enumerate media files for this folder."}, status_code=400)
+        output_override_raw = str(body.output_dir_override or "").strip()
+        output_override: Path | None = None
+        if output_override_raw:
+            try:
+                output_override = validate_runtime_dir(output_override_raw, "Output folder")
+            except ValueError as e:
+                logger.warning("enqueue_folder_commit_invalid_output_override error=%s", e)
+                return JSONResponse({"ok": False, "error": "Invalid output folder override."}, status_code=400)
         q = 0
         skipped = 0
         missing = 0
@@ -229,6 +208,9 @@ def register_api_routes(
             if jid < 0:
                 skipped += 1
             else:
+                if output_override is not None:
+                    run_dir = output_override / f"run_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_job{jid}"
+                    db.set_output_dir(jid, str(run_dir))
                 q += 1
         logger.info("batch_enqueued_commit count=%s skipped=%s missing=%s folder=%s", q, skipped, missing, p)
         msg = f"Queued {q} file(s), skipped {skipped} active duplicate(s), {missing} path(s) not in folder."

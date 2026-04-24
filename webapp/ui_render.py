@@ -39,6 +39,9 @@ def render_home_page_html(
     result_rows: list[str],
     job_items: list[str],
     output_label: str,
+    default_input_label: str,
+    default_video_label: str,
+    default_output_label: str,
     input_label: str,
     video_label: str,
     hide_blanks: bool,
@@ -125,6 +128,10 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
 .enqueue-row{{display:flex;align-items:flex-start;gap:8px;padding:8px;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:6px;background:#f8fafc}}
 .enqueue-row.disabled{{opacity:.65}}
 .enqueue-meta{{font-size:12px;color:#64748b}}
+.inline-popup{{margin-top:10px;border:1px solid #cbd5e1;border-radius:10px;background:#f8fafc;padding:10px;display:grid;gap:8px}}
+.inline-popup[hidden]{{display:none}}
+.inline-popup-title{{font-size:14px;font-weight:700;color:#0f172a}}
+.inline-popup-actions{{display:flex;gap:8px;flex-wrap:wrap}}
 .viewer-overlay{{position:fixed;inset:0;background:rgba(2,6,23,.72);display:none;align-items:center;justify-content:center;z-index:9999}}
 .viewer-box{{width:min(96vw,1200px);height:min(92vh,900px);background:#0b1220;border-radius:10px;padding:10px;display:grid;grid-template-rows:auto auto 1fr;gap:8px}}
 .viewer-top{{display:flex;justify-content:space-between;align-items:center;color:#e2e8f0}}
@@ -222,7 +229,15 @@ This keeps your existing job history and generated files.'>Cancel All</a>
   <form id='enqueueFolderForm' onsubmit='return false;'>
     <label>Folder Path (local on this machine)</label>
     <input id='enqueueFolderPath' name='folder_path' value='{video_dir_posix}' />
-    <p class='job-meta' style='margin:6px 0 0 0'>If this folder changes, the app will ask whether to keep default output or set a custom output path.</p>
+    <p class='job-meta' style='margin:6px 0 0 0'>If this folder changes, the app will ask whether to keep current output or restore the built-in default output.</p>
+    <div id='batchFolderInlinePopup' class='inline-popup' hidden>
+      <div class='inline-popup-title'>Batch folder changed</div>
+      <div id='batchFolderInlinePopupBody' class='job-meta'></div>
+      <div class='inline-popup-actions'>
+        <button class='btn btn-subtle btn-compact' type='button' onclick='resolveBatchFolderInlinePopup("default")'>Keep current output</button>
+        <button id='batchRestoreDefaultBtn' class='btn btn-subtle btn-compact' type='button' onclick='resolveBatchFolderInlinePopup("restore")'>Restore built-in default output</button>
+      </div>
+    </div>
     <div style='height:8px'></div>
     <label>Include extensions (comma-separated)</label>
     <input id='enqueueExts' name='exts' value='.mp4,.mov,.avi,.mkv,.jpg,.jpeg,.png,.webp' />
@@ -356,6 +371,7 @@ This will:
     <div style='height:10px'></div>
     <div class='actions'>
       <button class='btn' type='button' onclick='saveRuntimeSettings()'>Save Paths</button>
+      <button class='btn btn-subtle' type='button' onclick='restoreRuntimeDefaults()'>Restore defaults</button>
     </div>
     <p id='settingsPathMsg' class='job-meta' style='margin-top:10px'></p>
   </div>
@@ -472,6 +488,9 @@ const HAS_ACTIVE = {"true" if has_active else "false"};
 let FRAME_RECORDS = {records_json};
 const HIDE_BLANKS = {"true" if hide_blanks else "false"};
 const SPECIES_MODE = {species_mode!r};
+const DEFAULT_INPUT_DIR = {default_input_label!r};
+const DEFAULT_VIDEO_DIR = {default_video_label!r};
+const DEFAULT_OUTPUT_DIR = {default_output_label!r};
 let CURRENT_ZOOM = 100;
 let ACTIVE_VIDEO = '';
 let ACTIVE_FRAME = '';
@@ -480,6 +499,8 @@ let _enqueuePreviewState = null;
 let _exportPreviewHideBlanks = true;
 let _exportDownloadInFlight = false;
 let _lastBatchFolderPrompt = '';
+let _batchFolderPopupResolve = null;
+let _batchOutputOverride = '';
 let _tagEditRel = '';
 let _tagEditSpeciesShort = '';
 const ACTIVE_TAG_FILTERS = new Set();
@@ -688,7 +709,15 @@ async function previewEnqueueFolder() {{
   const fps = document.getElementById('enqueueFps')?.value || '1';
   const ml = document.getElementById('enqueueMl')?.value || 'http://127.0.0.1:8010';
   const sp = document.getElementById('enqueueSpecies')?.value || 'http://127.0.0.1:8100';
-  _enqueuePreviewState = {{ folder: folder, exts: exts, fps: fps, ml_url: ml, species_url: sp, items: items }};
+  _enqueuePreviewState = {{
+    folder: folder,
+    exts: exts,
+    fps: fps,
+    ml_url: ml,
+    species_url: sp,
+    batch_output_dir: _batchOutputOverride || '',
+    items: items,
+  }};
   const done = items.filter((x) => x.prior_status === 'done').length;
   const active = items.filter((x) => x.prior_status === 'queued' || x.prior_status === 'running').length;
   const sum = document.getElementById('enqueuePreviewSummary');
@@ -744,6 +773,7 @@ async function commitEnqueuePreview() {{
     fps: Number(_enqueuePreviewState.fps) || 1,
     ml_url: _enqueuePreviewState.ml_url,
     species_url: _enqueuePreviewState.species_url,
+    output_dir_override: String(_enqueuePreviewState.batch_output_dir || ''),
     input_paths: paths,
   }};
   const res = await fetch('/api/enqueue-folder-commit', {{
@@ -1036,72 +1066,129 @@ async function ensureBatchOutputChoice(folderPath) {{
   if (!videoEl || !inputEl || !outputEl) return true;
   const currentVideo = String(videoEl.value || '').trim();
   if (!currentVideo || folder.toLowerCase() === currentVideo.toLowerCase()) return true;
-  if (_lastBatchFolderPrompt.toLowerCase() === folder.toLowerCase()) return true;
 
   const defaultOut = String(outputEl.value || '');
-  const useDefault = window.confirm(
-    `Batch folder changed:\\n${{folder}}\\n\\nWould you like to keep the current default output folder?\\n\\nOK = Keep default output\\n(${{defaultOut}})\\n\\nCancel = Choose a custom output folder now`
-  );
-  if (useDefault) {{
+  if (defaultOut.trim().toLowerCase() === String(DEFAULT_OUTPUT_DIR || '').trim().toLowerCase()) {{
+    _batchOutputOverride = '';
     _lastBatchFolderPrompt = folder;
     return true;
   }}
-
-  const custom = window.prompt('Enter the output folder path to use for this batch folder:', outputEl.value || '');
-  if (custom === null) return false;
-  const customOut = String(custom || '').trim();
+  const choice = await openBatchFolderInlinePopup(folder, defaultOut);
+  if (choice.action === 'default') {{
+    _batchOutputOverride = '';
+    _lastBatchFolderPrompt = folder;
+    return true;
+  }}
+  if (choice.action !== 'restore') return false;
+  const customOut = String(DEFAULT_OUTPUT_DIR || '').trim();
   if (!customOut) {{
     await openConfirmModal('Output folder cannot be empty.\\n\\nPlease enter a valid folder path.', {{ title: 'Set Output Folder' }});
     return false;
   }}
-
-  const res = await fetch('/api/settings/runtime', {{
-    method: 'POST',
-    headers: {{ 'Content-Type': 'application/json' }},
-    body: JSON.stringify({{
-      input_dir: inputEl.value || '',
-      video_dir: folder,
-      output_dir: customOut,
-    }}),
-  }});
-  const data = await res.json();
-  if (!data.ok) {{
-    await openConfirmModal(data.error || 'Unable to save the output folder. Please verify the path and try again.', {{ title: 'Set Output Folder' }});
-    return false;
-  }}
-  videoEl.value = data.video_dir || folder;
-  outputEl.value = data.output_dir || customOut;
+  _batchOutputOverride = customOut;
   _lastBatchFolderPrompt = folder;
   const msg = document.getElementById('settingsPathMsg');
-  if (msg) msg.textContent = `Saved runtime paths for batch folder: ${{folder}}`;
+  if (msg) msg.textContent = `Using output folder for this batch only: ${{customOut}}`;
   return true;
 }}
-async function saveRuntimeSettings() {{
+function openBatchFolderInlinePopup(folder, defaultOut) {{
+  return new Promise((resolve) => {{
+    const box = document.getElementById('batchFolderInlinePopup');
+    const body = document.getElementById('batchFolderInlinePopupBody');
+    const restoreBtn = document.getElementById('batchRestoreDefaultBtn');
+    const currentOut = String(defaultOut || '').trim();
+    const builtInOut = String(DEFAULT_OUTPUT_DIR || '').trim();
+    const canRestoreBuiltIn = currentOut.toLowerCase() !== builtInOut.toLowerCase();
+    _batchFolderPopupResolve = resolve;
+    if (restoreBtn) restoreBtn.hidden = !canRestoreBuiltIn;
+    if (body) {{
+      body.textContent = canRestoreBuiltIn
+        ? `New folder: ${{folder}}. Use current output (${{currentOut}}) or restore built-in default (${{builtInOut}}).`
+        : `New folder: ${{folder}}. Keeping current output: ${{currentOut}}.`;
+    }}
+    if (box) box.hidden = false;
+  }});
+}}
+function resolveBatchFolderInlinePopup(action) {{
+  if (!_batchFolderPopupResolve) return;
+  const box = document.getElementById('batchFolderInlinePopup');
+  const resolver = _batchFolderPopupResolve;
+  if (action === 'default') {{
+    if (box) box.hidden = true;
+    _batchFolderPopupResolve = null;
+    resolver({{ action: 'default' }});
+    return;
+  }}
+  if (action === 'restore') {{
+    if (box) box.hidden = true;
+    _batchFolderPopupResolve = null;
+    resolver({{ action: 'restore' }});
+    return;
+  }}
+  if (box) box.hidden = true;
+  _batchFolderPopupResolve = null;
+  resolver({{ action: 'cancel' }});
+}}
+async function saveRuntimeSettings(opts = {{}}) {{
+  const shouldReload = opts.reload !== false;
   const inputDir = document.getElementById('settingsInputDir')?.value || '';
   const videoDir = document.getElementById('settingsVideoDir')?.value || '';
   const outputDir = document.getElementById('settingsOutputDir')?.value || '';
   const msg = document.getElementById('settingsPathMsg');
   if (msg) msg.textContent = 'Saving...';
   try {{
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
     const res = await fetch('/api/settings/runtime', {{
       method: 'POST',
       headers: {{ 'Content-Type': 'application/json' }},
+      signal: controller.signal,
       body: JSON.stringify({{
         input_dir: inputDir,
         video_dir: videoDir,
         output_dir: outputDir,
       }}),
     }});
-    const data = await res.json();
-    if (!data.ok) {{
+    clearTimeout(timeoutId);
+    let data = null;
+    try {{
+      data = await res.json();
+    }} catch (_) {{
+      data = null;
+    }}
+    if (!res.ok) {{
+      if (msg) msg.textContent = (data && data.error) || 'Failed to save settings.';
+      return;
+    }}
+    if (!data || !data.ok) {{
       if (msg) msg.textContent = data.error || 'Failed to save settings.';
       return;
     }}
-    if (msg) msg.textContent = 'Saved. Reloading...';
-    window.location.reload();
+    const settingsInput = document.getElementById('settingsInputDir');
+    const settingsVideo = document.getElementById('settingsVideoDir');
+    const settingsOutput = document.getElementById('settingsOutputDir');
+    const enqueueFolder = document.getElementById('enqueueFolderPath');
+    if (settingsInput) settingsInput.value = String(data.input_dir || inputDir);
+    if (settingsVideo) settingsVideo.value = String(data.video_dir || videoDir);
+    if (settingsOutput) settingsOutput.value = String(data.output_dir || outputDir);
+    if (enqueueFolder) enqueueFolder.value = String(data.video_dir || videoDir);
+    if (msg) msg.textContent = shouldReload ? 'Saved. Reloading...' : 'Saved.';
+    if (shouldReload) window.location.reload();
   }} catch (_) {{
-    if (msg) msg.textContent = 'Failed to save settings.';
+    if (msg) msg.textContent = 'Failed to save settings (request timed out or network issue).';
   }}
+}}
+async function restoreRuntimeDefaults() {{
+  const inputEl = document.getElementById('settingsInputDir');
+  const videoEl = document.getElementById('settingsVideoDir');
+  const outputEl = document.getElementById('settingsOutputDir');
+  const msg = document.getElementById('settingsPathMsg');
+  if (!inputEl || !videoEl || !outputEl) return;
+  inputEl.value = String(DEFAULT_INPUT_DIR || '');
+  videoEl.value = String(DEFAULT_VIDEO_DIR || '');
+  outputEl.value = String(DEFAULT_OUTPUT_DIR || '');
+  if (msg) msg.textContent = 'Restored defaults. Saving...';
+  await saveRuntimeSettings({{ reload: false }});
 }}
 async function saveDetectionSettings() {{
   const confRaw = document.getElementById('settingsDetMinConf')?.value || '0';

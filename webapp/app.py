@@ -39,7 +39,7 @@ from webapp.export_utils import (
 from webapp.jobs_db import create_jobs_db
 from webapp.pipeline import SUPPORTED_IMAGES, SUPPORTED_VIDEOS, extract_frames, process_images
 from webapp.routes_api import register_api_routes
-from webapp.runtime_paths import runtime_dirs, validate_runtime_dir
+from webapp.runtime_paths import defaults, runtime_dirs, validate_runtime_dir
 from webapp.ui_render import render_home_page_html, render_output_browser_page
 from webapp.worker import run_worker_loop
 
@@ -806,6 +806,7 @@ def _render_page(
     has_active = counts.get("queued", 0) > 0 or counts.get("running", 0) > 0
     # Always embed all frames so the video browser checkbox can reveal blanks without a full reload.
     records_json = json.dumps(all_frame_records).replace("</", "<\\/")
+    default_input_dir, default_video_dir, default_output_dir = defaults(ROOT)
     output_label = html.escape(output_dir.as_posix())
     input_label = html.escape(input_dir.as_posix())
     video_label = html.escape(video_dir.as_posix())
@@ -822,6 +823,9 @@ def _render_page(
         result_rows=result_rows,
         job_items=job_items,
         output_label=output_label,
+        default_input_label=default_input_dir.as_posix(),
+        default_video_label=default_video_dir.as_posix(),
+        default_output_label=default_output_dir.as_posix(),
         input_label=input_label,
         video_label=video_label,
         hide_blanks=hide_blanks,
