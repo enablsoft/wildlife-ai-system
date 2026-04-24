@@ -87,25 +87,33 @@ def register_api_routes(
             video_root = Path(raw_video_root).expanduser().resolve(strict=False)
         except Exception:
             video_root = default_video_root
+        try:
+            video_root_real = video_root.resolve(strict=True)
+        except Exception:
+            return None, "Runtime video folder is unavailable."
         expanded = os.path.expanduser(raw)
-        normalized_input = os.path.normpath(expanded)
-        if os.path.isabs(normalized_input):
-            candidate = Path(normalized_input).resolve(strict=False)
+        normalized_input = Path(os.path.normpath(expanded))
+        if normalized_input.is_absolute():
+            candidate = normalized_input.resolve(strict=False)
         else:
-            candidate = (video_root / normalized_input).resolve(strict=False)
+            candidate = (video_root_real / normalized_input).resolve(strict=False)
         candidate_norm = os.path.normcase(str(candidate))
-        video_root_norm = os.path.normcase(str(video_root))
+        video_root_norm = os.path.normcase(str(video_root_real))
         try:
             within_video_root = os.path.commonpath([candidate_norm, video_root_norm]) == video_root_norm
         except ValueError:
             within_video_root = False
         if not within_video_root:
-            return None, f"Folder must be inside runtime video folder: {video_root}"
+            return None, f"Folder must be inside runtime video folder: {video_root_real}"
 
         try:
             resolved = candidate.resolve(strict=True)
         except Exception:
             return None, "Folder not found."
+        try:
+            resolved.relative_to(video_root_real)
+        except Exception:
+            return None, f"Folder must be inside runtime video folder: {video_root_real}"
         if not resolved.is_dir():
             return None, "Folder path must be a directory."
         return resolved, None
