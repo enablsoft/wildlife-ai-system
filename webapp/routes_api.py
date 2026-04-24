@@ -84,36 +84,34 @@ def register_api_routes(
         default_video_root = (repo_root / "test-media" / "video").resolve(strict=False)
         raw_video_root = db.get_control("runtime_video_dir", str(default_video_root))
         try:
-            video_root = Path(raw_video_root).expanduser().resolve(strict=False)
+            video_root = Path(raw_video_root).expanduser()
         except Exception:
             video_root = default_video_root
         try:
             video_root_real = video_root.resolve(strict=True)
         except Exception:
             return None, "Runtime video folder is unavailable."
+
+        # Restrict folder input to relative paths under runtime_video_dir.
         expanded = os.path.expanduser(raw)
-        normalized_input = Path(os.path.normpath(expanded))
-        if normalized_input.is_absolute():
-            candidate = normalized_input.resolve(strict=False)
-        else:
-            candidate = (video_root_real / normalized_input).resolve(strict=False)
-        candidate_norm = os.path.normcase(str(candidate))
-        video_root_norm = os.path.normcase(str(video_root_real))
-        try:
-            within_video_root = os.path.commonpath([candidate_norm, video_root_norm]) == video_root_norm
-        except ValueError:
-            within_video_root = False
-        if not within_video_root:
+        if os.path.isabs(expanded):
+            return None, "Folder path must be relative to runtime video folder."
+        normalized_rel = os.path.normpath(expanded)
+        # Reject traversal and Windows drive-qualified segments.
+        if normalized_rel.startswith("..") or normalized_rel == "." or ":" in normalized_rel:
+            return None, "Invalid folder path."
+
+        video_root_real_str = os.path.realpath(str(video_root_real))
+        candidate_str = os.path.realpath(os.path.join(video_root_real_str, normalized_rel))
+        root_prefix = os.path.join(video_root_real_str, "")
+        if not candidate_str.startswith(root_prefix):
             return None, f"Folder must be inside runtime video folder: {video_root_real}"
 
+        candidate = Path(candidate_str)
         try:
             resolved = candidate.resolve(strict=True)
         except Exception:
             return None, "Folder not found."
-        try:
-            resolved.relative_to(video_root_real)
-        except Exception:
-            return None, f"Folder must be inside runtime video folder: {video_root_real}"
         if not resolved.is_dir():
             return None, "Folder path must be a directory."
         return resolved, None

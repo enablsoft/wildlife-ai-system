@@ -533,6 +533,33 @@ Bi-directional migration helper (Mongo -> SQLite):
 
 ---
 
+## Local CodeQL
+
+Use local CodeQL only when you want to pre-check findings before pushing. CI CodeQL still runs in GitHub Actions for everyone.
+
+Prerequisite:
+
+```powershell
+codeql version
+```
+
+Run local scan with helper script:
+
+```powershell
+# Create DB and analyze (recommended for fresh run)
+.\scripts\run-codeql.ps1 -OverwriteDb
+
+# Analyze only using existing DB
+.\scripts\run-codeql.ps1 -SkipCreate
+```
+
+Outputs:
+
+- Local database: `.codeql-db/` (gitignored)
+- Results: `codeql-results.sarif` (gitignored)
+
+---
+
 ## Environment preflight
 
 Check required `.env` keys before running app/tests:

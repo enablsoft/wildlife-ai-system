@@ -210,6 +210,11 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
+# CodeQL local artifacts
+.codeql-db/
+.codeql-db*/
+codeql-results.sarif
+codeql-results*.sarif
 
 # Test media
 test-media/video/*.mp4
