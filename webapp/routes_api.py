@@ -17,7 +17,9 @@ from typing import Any, Callable
 from fastapi import Query
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
+from webapp.jobs_db import JobsDb
 from webapp.pipeline import process_images
+from webapp.runtime_paths import runtime_dirs
 
 
 def _basename_only(raw: str) -> str:
@@ -32,7 +34,77 @@ def _basename_only(raw: str) -> str:
     return base
 
 
-def _trusted_input_path_for_stem(outputs: list[Any], stem_lc: str) -> Path | None:
+def _path_under_one_of(candidate: Path, roots: list[Path]) -> bool:
+    try:
+        cr = candidate.resolve(strict=False)
+    except OSError:
+        return False
+    for root in roots:
+        try:
+            cr.relative_to(root.resolve(strict=False))
+            return True
+        except (ValueError, OSError):
+            continue
+    return False
+
+
+def _resolve_db_path_under_roots(raw: str, roots: list[Path]) -> Path | None:
+    """Resolve a path from DB/job JSON only if it stays under one of the trusted roots."""
+    s = (raw or "").strip()
+    if not s:
+        return None
+    try:
+        rp = Path(s).expanduser().resolve(strict=False)
+    except OSError:
+        return None
+    return rp if _path_under_one_of(rp, roots) else None
+
+
+def _roots_for_job(db: JobsDb, job: Any) -> list[Path]:
+    """Prefixes allowed for paths associated with a single job (repo, runtime dirs, job output folder)."""
+    rr = Path(__file__).resolve().parents[1]
+    roots: list[Path] = [rr, *runtime_dirs(rr, db)]
+    out_raw = str(job.get("output_dir") or "").strip()
+    if out_raw:
+        try:
+            od = Path(out_raw).expanduser().resolve(strict=False)
+            if od.is_dir():
+                roots.append(od)
+        except OSError:
+            pass
+    return roots
+
+
+def _job_output_dir(job: Any) -> Path | None:
+    """Resolved job output directory, if it exists on disk."""
+    out_raw = str(job.get("output_dir") or "").strip()
+    if not out_raw:
+        return None
+    try:
+        od = Path(out_raw).expanduser().resolve(strict=False)
+        return od if od.is_dir() else None
+    except OSError:
+        return None
+
+
+def _safe_join_file_under_dir(root: Path, file_name: str) -> Path | None:
+    """Join root / basename(file_name) and require the result stays under root."""
+    name = _basename_only(file_name) if file_name else ""
+    if not name:
+        return None
+    joined = root / name
+    try:
+        resolved = joined.resolve(strict=False)
+    except OSError:
+        return None
+    try:
+        resolved.relative_to(root.resolve(strict=False))
+    except (ValueError, OSError):
+        return None
+    return resolved
+
+
+def _trusted_input_path_for_stem(outputs: list[Any], stem_lc: str, roots: list[Path]) -> Path | None:
     """Pick an on-disk input path from persisted job outputs only (never from user-resolved paths)."""
     want = stem_lc.lower()
     for row in outputs:
@@ -48,10 +120,9 @@ def _trusted_input_path_for_stem(outputs: list[Any], stem_lc: str) -> Path | Non
         p_in = str(row.get("input") or "").strip()
         if not p_in:
             continue
-        try:
-            return Path(p_in).resolve(strict=False)
-        except OSError:
-            continue
+        rp = _resolve_db_path_under_roots(p_in, roots)
+        if rp is not None:
+            return rp
     return None
 
 
@@ -152,11 +223,16 @@ def register_api_routes(
                 )
             return None, f"Folder must be inside runtime video folder: {video_root_real}"
 
-        candidate = Path(candidate_str)
         try:
-            resolved = candidate.resolve(strict=True)
+            resolved = Path(candidate_str).resolve(strict=True)
         except OSError:
             return None, "Folder not found."
+        try:
+            common = os.path.commonpath([str(resolved), video_root_real_str])
+        except ValueError:
+            return None, "Invalid folder path."
+        if os.path.normcase(common) != os.path.normcase(video_root_real_str):
+            return None, "Folder must be inside runtime video folder."
         try:
             resolved.relative_to(video_root_real)
         except ValueError:
@@ -372,6 +448,8 @@ def register_api_routes(
         if not j:
             return JSONResponse({"ok": False, "error": "Job not found."}, status_code=404)
 
+        roots = _roots_for_job(db, j)
+
         outputs: list[Any] = []
         raw_outputs = j.get("outputs_json")
         if raw_outputs:
@@ -391,26 +469,19 @@ def register_api_routes(
                 p_in = str(row.get("input") or "").strip()
                 if not p_in:
                     continue
-                try:
-                    allowed_inputs.add(Path(p_in).resolve(strict=False))
-                except OSError:
-                    continue
+                rp = _resolve_db_path_under_roots(p_in, roots)
+                if rp is not None:
+                    allowed_inputs.add(rp)
         if not allowed_inputs:
             # Single-image jobs may not have outputs_json populated yet in some test/migration states.
             raw_job_input = str(j.get("input_path") or "").strip()
-            if raw_job_input:
-                try:
-                    job_input_resolved = Path(raw_job_input).resolve(strict=False)
-                except OSError:
-                    job_input_resolved = None
-                if job_input_resolved is not None:
-                    allowed_inputs.add(job_input_resolved)
+            job_input_resolved = _resolve_db_path_under_roots(raw_job_input, roots)
+            if job_input_resolved is not None:
+                allowed_inputs.add(job_input_resolved)
         if not allowed_inputs:
             # Fallback for older jobs where outputs_json is absent but output artifacts exist.
-            out_dir_raw = str(j.get("output_dir") or "").strip()
-            if out_dir_raw:
-                out_dir = Path(out_dir_raw)
-                if out_dir.is_dir():
+            out_dir = _job_output_dir(j)
+            if out_dir is not None:
                     known_stems: set[str] = set()
                     for ann in out_dir.glob("*.annotated.jpg"):
                         base = re.sub(r"\.annotated\.jpg$", "", ann.name, flags=re.IGNORECASE).strip()
@@ -419,7 +490,7 @@ def register_api_routes(
                     bn = _basename_only(str(body.input_path or ""))
                     stem_lc = Path(bn).stem.lower() if bn else ""
                     if stem_lc and stem_lc in known_stems:
-                        trusted = _trusted_input_path_for_stem(outputs, stem_lc)
+                        trusted = _trusted_input_path_for_stem(outputs, stem_lc, roots)
                         if trusted is not None:
                             allowed_inputs.add(trusted)
         if not allowed_inputs:
@@ -434,10 +505,8 @@ def register_api_routes(
         if matched_input is None:
             # Legacy/partial jobs may have incomplete outputs_json entries for some frames.
             # Allow rerun when requested frame stem maps to this job's annotated outputs.
-            out_dir_raw = str(j.get("output_dir") or "").strip()
-            if out_dir_raw:
-                out_dir = Path(out_dir_raw)
-                if out_dir.is_dir():
+            out_dir = _job_output_dir(j)
+            if out_dir is not None:
                     known_stems: set[str] = set()
                     for ann in out_dir.glob("*.annotated.jpg"):
                         base = re.sub(r"\.annotated\.jpg$", "", ann.name, flags=re.IGNORECASE).strip()
@@ -446,7 +515,7 @@ def register_api_routes(
                     bn = _basename_only(raw_path)
                     stem_lc = Path(bn).stem.lower() if bn else ""
                     if stem_lc and stem_lc in known_stems:
-                        matched_input = _trusted_input_path_for_stem(outputs, stem_lc)
+                        matched_input = _trusted_input_path_for_stem(outputs, stem_lc, roots)
         if matched_input is None:
             return JSONResponse({"ok": False, "error": "Frame is not part of this job."}, status_code=403)
         try:
