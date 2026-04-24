@@ -81,11 +81,26 @@ def register_api_routes(
         if not raw:
             return None, "Folder path is required."
         repo_root = Path(__file__).resolve().parents[1]
+        default_video_root = (repo_root / "test-media" / "video").resolve(strict=False)
+        raw_video_root = db.get_control("runtime_video_dir", str(default_video_root))
+        try:
+            video_root = Path(raw_video_root).expanduser().resolve(strict=False)
+        except Exception:
+            video_root = default_video_root
         expanded = os.path.expanduser(raw)
         normalized_input = os.path.normpath(expanded)
-        candidate = Path(normalized_input)
-        if not candidate.is_absolute():
-            candidate = (repo_root / candidate).resolve(strict=False)
+        if os.path.isabs(normalized_input):
+            candidate = Path(normalized_input).resolve(strict=False)
+        else:
+            candidate = (video_root / normalized_input).resolve(strict=False)
+        candidate_norm = os.path.normcase(str(candidate))
+        video_root_norm = os.path.normcase(str(video_root))
+        try:
+            within_video_root = os.path.commonpath([candidate_norm, video_root_norm]) == video_root_norm
+        except ValueError:
+            within_video_root = False
+        if not within_video_root:
+            return None, f"Folder must be inside runtime video folder: {video_root}"
 
         try:
             resolved = candidate.resolve(strict=True)
