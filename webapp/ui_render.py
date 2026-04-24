@@ -132,6 +132,8 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
 .inline-popup[hidden]{{display:none}}
 .inline-popup-title{{font-size:14px;font-weight:700;color:#0f172a}}
 .inline-popup-actions{{display:flex;gap:8px;flex-wrap:wrap}}
+.inline-review{{margin-top:10px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;padding:10px;display:grid;gap:8px}}
+.inline-review[hidden]{{display:none}}
 .viewer-overlay{{position:fixed;inset:0;background:rgba(2,6,23,.72);display:none;align-items:center;justify-content:center;z-index:9999}}
 .viewer-box{{width:min(96vw,1200px);height:min(92vh,900px);background:#0b1220;border-radius:10px;padding:10px;display:grid;grid-template-rows:auto auto 1fr;gap:8px}}
 .viewer-top{{display:flex;justify-content:space-between;align-items:center;color:#e2e8f0}}
@@ -220,8 +222,14 @@ This keeps your existing job history and generated files.'>Cancel All</a>
     <div id='dropZone' style='border:2px dashed #94a3b8;border-radius:10px;padding:12px;color:#334155'>
       Drag & drop files here
     </div>
+    <div id='quickUploadPreview' class='inline-review' hidden>
+      <div style='font-weight:700;color:#0f172a'>Selected files preview</div>
+      <div id='quickUploadSummary' class='job-meta'></div>
+      <div id='quickUploadList' class='job-meta' style='max-height:200px;overflow:auto'></div>
+    </div>
     <div style='height:8px'></div>
     <button class='btn' type='button' onclick='queueSelectedFiles()'>Add Selected Files to Queue</button>
+    <p id='quickUploadMsg' class='job-meta' style='margin-top:8px'></p>
   </div>
 </div>
 <div class='panel' style='margin-top:16px'>
@@ -252,6 +260,16 @@ This keeps your existing job history and generated files.'>Cancel All</a>
     <input id='enqueueSpecies' name='species_url' value='http://127.0.0.1:8100' />
     <div style='height:10px'></div>
     <button class='btn' type='button' id='btnEnqueuePreview' onclick='previewEnqueueFolder()'>Preview and Queue Files</button>
+    <p id='enqueueFolderMsg' class='job-meta' style='margin-top:8px'></p>
+    <div id='enqueuePreviewInline' class='inline-review' hidden>
+      <div style='font-weight:700;color:#0f172a'>Review media to queue</div>
+      <div id='enqueuePreviewSummary' class='job-meta'></div>
+      <div id='enqueuePreviewList'></div>
+      <div class='actions'>
+        <button type='button' class='btn btn-subtle' id='enqueuePreviewCancel'>Cancel</button>
+        <button type='button' class='btn' id='enqueuePreviewOk'>Queue Selected Files</button>
+      </div>
+    </div>
   </form>
 </div>
 <div class='panel' style='margin-top:16px'>
@@ -421,18 +439,6 @@ This will:
     </div>
   </div>
 </div>
-<div id='enqueuePreviewModal' class='app-modal' role='dialog' aria-modal='true'>
-  <div class='app-modal-backdrop' id='enqueuePreviewBackdrop'></div>
-  <div class='app-modal-box' style='max-width:min(860px,96vw)'>
-    <div class='app-modal-title'>Review media to queue</div>
-    <div id='enqueuePreviewSummary' class='job-meta'></div>
-    <div id='enqueuePreviewList'></div>
-    <div class='app-modal-actions'>
-      <button type='button' class='btn btn-subtle' id='enqueuePreviewCancel'>Cancel</button>
-      <button type='button' class='btn' id='enqueuePreviewOk'>Queue Selected Files</button>
-    </div>
-  </div>
-</div>
 <div id='exportPreviewModal' class='app-modal' role='dialog' aria-modal='true'>
   <div class='app-modal-backdrop' id='exportPreviewBackdrop'></div>
   <div class='app-modal-box export-preview-box'>
@@ -587,7 +593,8 @@ function closeConfirmModal(ok) {{
   }}
 }}
 function closeEnqueuePreview() {{
-  document.getElementById('enqueuePreviewModal')?.classList.remove('show');
+  const inline = document.getElementById('enqueuePreviewInline');
+  if (inline) inline.hidden = true;
   _enqueuePreviewState = null;
 }}
 function closeExportPreview() {{
@@ -679,6 +686,41 @@ async function rerunFrame(inputPath, jobId) {{
 function esc(s) {{
   return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;');
 }}
+function setInlineMsg(elId, text, isError = false) {{
+  const el = document.getElementById(elId);
+  if (!el) return;
+  el.textContent = String(text || '');
+  el.style.color = isError ? '#991b1b' : '#0f766e';
+}}
+function renderQuickUploadPreview(fileLikeList) {{
+  const box = document.getElementById('quickUploadPreview');
+  const sum = document.getElementById('quickUploadSummary');
+  const list = document.getElementById('quickUploadList');
+  const files = Array.from(fileLikeList || []);
+  if (!box || !sum || !list) return;
+  if (files.length === 0) {{
+    box.hidden = true;
+    sum.textContent = '';
+    list.innerHTML = '';
+    return;
+  }}
+  box.hidden = false;
+  const byExt = new Map();
+  files.forEach((f) => {{
+    const name = String((f && f.name) || '');
+    const idx = name.lastIndexOf('.');
+    const ext = idx >= 0 ? name.slice(idx).toLowerCase() : '(no extension)';
+    byExt.set(ext, (byExt.get(ext) || 0) + 1);
+  }});
+  const extSummary = Array.from(byExt.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([k, v]) => `${{k}}: ${{v}}`)
+    .join(' | ');
+  sum.textContent = `${{files.length}} file(s) selected. ${{extSummary}}`;
+  const preview = files.slice(0, 120).map((f) => `<div>${{esc(String(f.name || ''))}}</div>`).join('');
+  list.innerHTML = preview + (files.length > 120 ? `<div>...and ${{files.length - 120}} more</div>` : '');
+}}
 function formatConfidencePercent(raw) {{
   const s = String(raw || '').trim();
   if (!s) return '';
@@ -688,6 +730,7 @@ function formatConfidencePercent(raw) {{
   return `${{pct.toFixed(1)}}%`;
 }}
 async function previewEnqueueFolder() {{
+  setInlineMsg('enqueueFolderMsg', '');
   const folder = document.getElementById('enqueueFolderPath')?.value || '';
   if (!(await ensureBatchOutputChoice(folder))) return;
   const exts = document.getElementById('enqueueExts')?.value || '';
@@ -698,12 +741,12 @@ async function previewEnqueueFolder() {{
   }});
   const data = await res.json();
   if (!data.ok) {{
-    await openConfirmModal(data.error || 'Unable to preview this folder. Please check the path and try again.', {{ title: 'Preview Folder' }});
+    setInlineMsg('enqueueFolderMsg', data.error || 'Unable to preview this folder. Please check the path and try again.', true);
     return;
   }}
   const items = data.items || [];
   if (items.length === 0) {{
-    await openConfirmModal('No matching media files were found in the selected folder.\\n\\nCheck the folder path and extension filters, then try again.', {{ title: 'Preview Folder' }});
+    setInlineMsg('enqueueFolderMsg', 'No matching media files were found in this folder. Check the path and extension filters.', true);
     return;
   }}
   const fps = document.getElementById('enqueueFps')?.value || '1';
@@ -722,6 +765,7 @@ async function previewEnqueueFolder() {{
   const active = items.filter((x) => x.prior_status === 'queued' || x.prior_status === 'running').length;
   const sum = document.getElementById('enqueuePreviewSummary');
   if (sum) sum.textContent = `${{items.length}} file(s) found — ${{done}} previously completed, ${{active}} already in queue.`;
+  setInlineMsg('enqueueFolderMsg', `${{items.length}} file(s) ready to review before queueing.`);
   const list = document.getElementById('enqueuePreviewList');
   if (!list) return;
   list.innerHTML = '';
@@ -755,16 +799,18 @@ async function previewEnqueueFolder() {{
     row.appendChild(label);
     list.appendChild(row);
   }});
-  document.getElementById('enqueuePreviewModal')?.classList.add('show');
+  const inline = document.getElementById('enqueuePreviewInline');
+  if (inline) inline.hidden = false;
 }}
 async function commitEnqueuePreview() {{
   if (!_enqueuePreviewState) return;
+  setInlineMsg('enqueueFolderMsg', '');
   const paths = [];
   document.querySelectorAll('#enqueuePreviewList input[type=checkbox]').forEach((cb) => {{
     if (!cb.disabled && cb.checked && cb.dataset.path) paths.push(cb.dataset.path);
   }});
   if (paths.length === 0) {{
-    await openConfirmModal('Select at least one file to queue.\\n\\nTip: completed files are unchecked by default, but you can enable them to re-run.', {{ title: 'Queue Selected Files' }});
+    setInlineMsg('enqueueFolderMsg', 'Select at least one file to queue. Completed files are unchecked by default.', true);
     return;
   }}
   const body = {{
@@ -784,9 +830,10 @@ async function commitEnqueuePreview() {{
   const data = await res.json();
   closeEnqueuePreview();
   if (!data.ok) {{
-    await openConfirmModal(data.error || 'Unable to queue selected files. Please try again.', {{ title: 'Queue Selected Files' }});
+    setInlineMsg('enqueueFolderMsg', data.error || 'Unable to queue selected files. Please try again.', true);
     return;
   }}
+  setInlineMsg('enqueueFolderMsg', data.message || 'Queued selected files.');
   const u = new URL(window.location.origin + '/');
   u.searchParams.set('msg', data.message || 'Queued.');
   window.location.href = u.toString();
@@ -796,7 +843,6 @@ async function commitEnqueuePreview() {{
   document.getElementById('appConfirmCancel')?.addEventListener('click', () => closeConfirmModal(false));
   document.getElementById('appConfirmBackdrop')?.addEventListener('click', () => closeConfirmModal(false));
   document.getElementById('enqueuePreviewCancel')?.addEventListener('click', () => closeEnqueuePreview());
-  document.getElementById('enqueuePreviewBackdrop')?.addEventListener('click', () => closeEnqueuePreview());
   document.getElementById('enqueuePreviewOk')?.addEventListener('click', async () => commitEnqueuePreview());
   document.getElementById('exportPreviewCancel')?.addEventListener('click', () => closeExportPreview());
   document.getElementById('exportPreviewBackdrop')?.addEventListener('click', () => closeExportPreview());
@@ -1331,10 +1377,19 @@ function renderVideoBrowser() {{
   renderInlinePreview(first || null);
 }}
 async function queueSelectedFiles() {{
+  setInlineMsg('quickUploadMsg', '');
   const picker = document.getElementById('multiFiles');
   const files = (window._droppedFiles && window._droppedFiles.length) ? window._droppedFiles : (picker?.files || []);
   if (!files || files.length === 0) {{
-    alert('Select files (or a folder) first.');
+    setInlineMsg('quickUploadMsg', 'Select files (or a folder) first.', true);
+    return;
+  }}
+  const ok = await openConfirmModal(
+    `Queue ${{files.length}} selected file(s) for processing?`,
+    {{ title: 'Quick Batch Upload' }}
+  );
+  if (!ok) {{
+    setInlineMsg('quickUploadMsg', 'Upload cancelled.');
     return;
   }}
   const ml = document.querySelector("input[name='ml_url']")?.value || 'http://127.0.0.1:8010';
@@ -1345,14 +1400,23 @@ async function queueSelectedFiles() {{
   fd.append('ml_url', ml);
   fd.append('species_url', sp);
   fd.append('fps', fps);
+  setInlineMsg('quickUploadMsg', `Queueing ${{files.length}} file(s)...`);
   const res = await fetch('/process-multi', {{ method: 'POST', body: fd }});
   if (res.redirected) {{
     window.location.href = res.url;
     return;
   }}
+  setInlineMsg('quickUploadMsg', 'Queued. Reloading...');
   window.location.reload();
 }}
 const dz = document.getElementById('dropZone');
+const multiPicker = document.getElementById('multiFiles');
+if (multiPicker) {{
+  multiPicker.addEventListener('change', () => {{
+    window._droppedFiles = [];
+    renderQuickUploadPreview(multiPicker.files || []);
+  }});
+}}
 if (dz) {{
   dz.addEventListener('dragover', (e) => {{
     e.preventDefault();
@@ -1367,6 +1431,7 @@ if (dz) {{
     const files = Array.from(e.dataTransfer?.files || []);
     window._droppedFiles = files;
     dz.textContent = files.length ? `${{files.length}} file(s) ready` : 'Drag & drop files here';
+    renderQuickUploadPreview(files);
   }});
 }}
 document.getElementById('viewerOverlay')?.addEventListener('click', (e) => {{
