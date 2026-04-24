@@ -104,7 +104,16 @@ def register_api_routes(
                 return None, "Invalid folder path."
             candidate_str = os.path.realpath(os.path.join(video_root_real_str, normalized_rel))
         root_prefix = os.path.join(video_root_real_str, "")
-        if not candidate_str.startswith(root_prefix):
+        candidate_norm = os.path.normcase(candidate_str)
+        root_norm = os.path.normcase(video_root_real_str)
+        within_root = candidate_norm == root_norm or candidate_norm.startswith(os.path.normcase(root_prefix))
+        if not within_root:
+            if os.path.normcase(video_root_real_str) == os.path.normcase(str(default_video_root)):
+                return (
+                    None,
+                    "Folder must be inside runtime video folder. "
+                    "If you changed Runtime Paths, click Save Paths first, then retry.",
+                )
             return None, f"Folder must be inside runtime video folder: {video_root_real}"
 
         candidate = Path(candidate_str)

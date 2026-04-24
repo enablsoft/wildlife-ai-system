@@ -125,9 +125,13 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
 .app-modal-title{{font-size:19px;font-weight:700;margin-bottom:8px;color:#0f172a}}
 .app-modal-body{{margin-bottom:10px;font-size:15px;color:#334155;line-height:1.35;white-space:pre-line}}
 .app-modal-actions{{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}}
-.enqueue-row{{display:flex;align-items:flex-start;gap:8px;padding:8px;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:6px;background:#f8fafc}}
+.enqueue-row{{display:grid;grid-template-columns:22px minmax(0,1fr);align-items:start;gap:10px;padding:10px;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:8px;background:#f8fafc}}
 .enqueue-row.disabled{{opacity:.65}}
+.enqueue-row input[type='checkbox']{{margin-top:3px}}
+.enqueue-label{{display:grid;gap:4px;min-width:0}}
+.enqueue-name{{font-weight:700;color:#0f172a;overflow-wrap:anywhere}}
 .enqueue-meta{{font-size:12px;color:#64748b}}
+.enqueue-path{{font-size:12px;color:#475569;overflow-wrap:anywhere}}
 .inline-popup{{margin-top:10px;border:1px solid #cbd5e1;border-radius:10px;background:#f8fafc;padding:10px;display:grid;gap:8px}}
 .inline-popup[hidden]{{display:none}}
 .inline-popup-title{{font-size:14px;font-weight:700;color:#0f172a}}
@@ -216,8 +220,9 @@ This keeps your existing job history and generated files.'>Cancel All</a>
       <button class='btn' type='submit'>Queue Job</button>
     </form>
     <div style='height:10px'></div>
-    <h4 style='margin:6px 0'>Quick Batch Upload (files/folder/drag-drop)</h4>
-    <input id='multiFiles' type='file' multiple webkitdirectory />
+    <h4 style='margin:6px 0'>Quick Batch Upload (files/drag-drop)</h4>
+    <input id='multiFiles' type='file' multiple />
+    <p class='job-meta' style='margin:6px 0 8px 0'>For full folders, use <b>Batch Queue From Folder</b> below (in-app flow).</p>
     <div style='height:8px'></div>
     <div id='dropZone' style='border:2px dashed #94a3b8;border-radius:10px;padding:12px;color:#334155'>
       Drag & drop files here
@@ -260,6 +265,7 @@ This keeps your existing job history and generated files.'>Cancel All</a>
     <input id='enqueueSpecies' name='species_url' value='http://127.0.0.1:8100' />
     <div style='height:10px'></div>
     <button class='btn' type='button' id='btnEnqueuePreview' onclick='previewEnqueueFolder()'>Preview and Queue Files</button>
+    <p class='job-meta' style='margin:8px 0 0 0'>Batch folder changes are saved to Runtime Video Path automatically during preview.</p>
     <p id='enqueueFolderMsg' class='job-meta' style='margin-top:8px'></p>
     <div id='enqueuePreviewInline' class='inline-review' hidden>
       <div style='font-weight:700;color:#0f172a'>Review media to queue</div>
@@ -718,7 +724,13 @@ function renderQuickUploadPreview(fileLikeList) {{
     .map(([k, v]) => `${{k}}: ${{v}}`)
     .join(' | ');
   sum.textContent = `${{files.length}} file(s) selected. ${{extSummary}}`;
-  const preview = files.slice(0, 120).map((f) => `<div>${{esc(String(f.name || ''))}}</div>`).join('');
+  const preview = files
+    .slice(0, 120)
+    .map((f) => {{
+      const rel = String(f.webkitRelativePath || f.relativePath || f.name || '').trim();
+      return `<div>${{esc(rel || String(f.name || ''))}}</div>`;
+    }})
+    .join('');
   list.innerHTML = preview + (files.length > 120 ? `<div>...and ${{files.length - 120}} more</div>` : '');
 }}
 function formatConfidencePercent(raw) {{
@@ -789,12 +801,15 @@ async function previewEnqueueFolder() {{
       cb.checked = true;
     }}
     const label = document.createElement('label');
-    label.style.flex = '1';
+    label.className = 'enqueue-label';
     let note = 'new';
     if (st === 'done') note = `processed (job #${{it.prior_job_id || '?'}})`;
     else if (st === 'queued' || st === 'running') note = `in queue (job #${{it.prior_job_id || '?'}})`;
     else if (st) note = `last: ${{st}} (#${{it.prior_job_id || '?'}})`;
-    label.innerHTML = `<b>${{esc(it.filename)}}</b> <span class='enqueue-meta'>(${{it.media_type}}) — ${{esc(note)}}</span>`;
+    label.innerHTML =
+      `<div class='enqueue-name'>${{esc(it.filename)}}</div>` +
+      `<div class='enqueue-meta'>${{esc(it.media_type)}} - ${{esc(note)}}</div>` +
+      `<div class='enqueue-path'>${{esc(String(it.input_path || ''))}}</div>`;
     row.appendChild(cb);
     row.appendChild(label);
     list.appendChild(row);
@@ -1103,6 +1118,23 @@ async function editManualTag(annotatedRel) {{
   }}
   openTagEditModal(rel, current, label, speciesShort);
 }}
+async function syncBatchFolderToRuntimeVideoPath(folderPath) {{
+  const folder = String(folderPath || '').trim();
+  if (!folder) return true;
+  const runtimeVideoEl = document.getElementById('settingsVideoDir');
+  if (!runtimeVideoEl) return true;
+  const currentVideo = String(runtimeVideoEl.value || '').trim();
+  if (currentVideo && currentVideo.toLowerCase() === folder.toLowerCase()) return true;
+  const prev = runtimeVideoEl.value;
+  runtimeVideoEl.value = folder;
+  const ok = await saveRuntimeSettings({{ reload: false }});
+  if (!ok) {{
+    runtimeVideoEl.value = prev;
+    setInlineMsg('enqueueFolderMsg', 'Could not save runtime video path from batch folder. Please verify folder access.', true);
+    return false;
+  }}
+  return true;
+}}
 async function ensureBatchOutputChoice(folderPath) {{
   const folder = String(folderPath || '').trim();
   if (!folder) return true;
@@ -1117,13 +1149,13 @@ async function ensureBatchOutputChoice(folderPath) {{
   if (defaultOut.trim().toLowerCase() === String(DEFAULT_OUTPUT_DIR || '').trim().toLowerCase()) {{
     _batchOutputOverride = '';
     _lastBatchFolderPrompt = folder;
-    return true;
+    return await syncBatchFolderToRuntimeVideoPath(folder);
   }}
   const choice = await openBatchFolderInlinePopup(folder, defaultOut);
   if (choice.action === 'default') {{
     _batchOutputOverride = '';
     _lastBatchFolderPrompt = folder;
-    return true;
+    return await syncBatchFolderToRuntimeVideoPath(folder);
   }}
   if (choice.action !== 'restore') return false;
   const customOut = String(DEFAULT_OUTPUT_DIR || '').trim();
@@ -1135,7 +1167,7 @@ async function ensureBatchOutputChoice(folderPath) {{
   _lastBatchFolderPrompt = folder;
   const msg = document.getElementById('settingsPathMsg');
   if (msg) msg.textContent = `Using output folder for this batch only: ${{customOut}}`;
-  return true;
+  return await syncBatchFolderToRuntimeVideoPath(folder);
 }}
 function openBatchFolderInlinePopup(folder, defaultOut) {{
   return new Promise((resolve) => {{
@@ -1204,11 +1236,11 @@ async function saveRuntimeSettings(opts = {{}}) {{
     }}
     if (!res.ok) {{
       if (msg) msg.textContent = (data && data.error) || 'Failed to save settings.';
-      return;
+      return false;
     }}
     if (!data || !data.ok) {{
       if (msg) msg.textContent = data.error || 'Failed to save settings.';
-      return;
+      return false;
     }}
     const settingsInput = document.getElementById('settingsInputDir');
     const settingsVideo = document.getElementById('settingsVideoDir');
@@ -1220,8 +1252,10 @@ async function saveRuntimeSettings(opts = {{}}) {{
     if (enqueueFolder) enqueueFolder.value = String(data.video_dir || videoDir);
     if (msg) msg.textContent = shouldReload ? 'Saved. Reloading...' : 'Saved.';
     if (shouldReload) window.location.reload();
+    return true;
   }} catch (_) {{
     if (msg) msg.textContent = 'Failed to save settings (request timed out or network issue).';
+    return false;
   }}
 }}
 async function restoreRuntimeDefaults() {{
@@ -1417,6 +1451,52 @@ if (multiPicker) {{
     renderQuickUploadPreview(multiPicker.files || []);
   }});
 }}
+function _readDirectoryEntries(reader) {{
+  return new Promise((resolve, reject) => {{
+    reader.readEntries(resolve, reject);
+  }});
+}}
+async function _walkDroppedEntry(entry, prefix = '') {{
+  if (!entry) return [];
+  if (entry.isFile) {{
+    const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
+    const relPath = `${{prefix}}${{file.name}}`;
+    try {{ file.relativePath = relPath; }} catch (_) {{}}
+    return [file];
+  }}
+  if (entry.isDirectory) {{
+    const reader = entry.createReader();
+    const out = [];
+    while (true) {{
+      const entries = await _readDirectoryEntries(reader);
+      if (!entries || entries.length === 0) break;
+      for (const child of entries) {{
+        const childPrefix = `${{prefix}}${{entry.name}}/`;
+        out.push(...(await _walkDroppedEntry(child, childPrefix)));
+      }}
+    }}
+    return out;
+  }}
+  return [];
+}}
+async function _collectDroppedFiles(e) {{
+  const items = Array.from(e.dataTransfer?.items || []);
+  if (!items.length) return Array.from(e.dataTransfer?.files || []);
+  const out = [];
+  let usedEntries = false;
+  for (const item of items) {{
+    if (item.kind !== 'file') continue;
+    const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
+    if (entry) {{
+      usedEntries = true;
+      out.push(...(await _walkDroppedEntry(entry)));
+      continue;
+    }}
+    const f = item.getAsFile ? item.getAsFile() : null;
+    if (f) out.push(f);
+  }}
+  return usedEntries ? out : Array.from(e.dataTransfer?.files || []);
+}}
 if (dz) {{
   dz.addEventListener('dragover', (e) => {{
     e.preventDefault();
@@ -1425,10 +1505,10 @@ if (dz) {{
   dz.addEventListener('dragleave', () => {{
     dz.style.borderColor = '#94a3b8';
   }});
-  dz.addEventListener('drop', (e) => {{
+  dz.addEventListener('drop', async (e) => {{
     e.preventDefault();
     dz.style.borderColor = '#94a3b8';
-    const files = Array.from(e.dataTransfer?.files || []);
+    const files = await _collectDroppedFiles(e);
     window._droppedFiles = files;
     dz.textContent = files.length ? `${{files.length}} file(s) ready` : 'Drag & drop files here';
     renderQuickUploadPreview(files);
