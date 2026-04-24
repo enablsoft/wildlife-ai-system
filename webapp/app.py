@@ -20,8 +20,7 @@ import subprocess
 import shutil
 import threading
 from contextlib import asynccontextmanager
-from urllib.parse import quote_plus, urlparse
-from datetime import datetime, timezone
+from urllib.parse import urlparse
 from pathlib import Path
 
 from typing import Any
@@ -103,6 +102,13 @@ def _norm_path(p: Path) -> str:
         return str(p)
 
 
+def _safe_log_value(value: Any) -> Any:
+    """Strip control characters from untrusted log fields."""
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    return re.sub(r"[\r\n\t]+", " ", str(value))
+
+
 def _parse_exts(exts: str) -> set[str]:
     return {x.strip().lower() for x in (exts or "").split(",") if x.strip()}
 
@@ -169,11 +175,9 @@ def _enqueue_uploaded_file(
     if jid < 0:
         return (jid, f"Already exists as job #{abs(jid)} for file: {Path(media.filename).name}")
     logger.info(
-        "job_queued file=%s media_type=%s ml_url=%s species_url=%s",
-        media.filename,
+        "job_queued file=%s media_type=%s",
+        _safe_log_value(media.filename),
         media_type,
-        ml_url,
-        species_url,
     )
     return (jid, "")
 
@@ -333,8 +337,8 @@ def _extract_trailcam_overlay_fields(image_path: Path) -> dict[str, str]:
         )
         try:
             tmp.unlink(missing_ok=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("trailcam_overlay_tmp_cleanup_failed path=%s err=%s", tmp, exc)
         text = (cp.stdout or "") if cp.returncode == 0 else ""
         tmatch = re.search(r"\b(-?\d{1,2})\s*([CF])\b", text, flags=re.IGNORECASE)
         # OCR sometimes reads C as 0 in trail-cam stamps (e.g. "110" instead of "11C").
@@ -350,8 +354,8 @@ def _extract_trailcam_overlay_fields(image_path: Path) -> dict[str, str]:
         timematch = re.search(r"\b(\d{1,2}:\d{2}\s*[AP]M)\b", text, flags=re.IGNORECASE)
         if timematch:
             out["overlay_time"] = re.sub(r"\s+", "", timematch.group(1).upper())
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("trailcam_overlay_ocr_failed image=%s err=%s", image_path, exc)
     _trailcam_overlay_cache[key] = out
     return out
 
@@ -380,8 +384,8 @@ def _frame_records(jobs: list[dict[str, object]]) -> list[dict[str, str]]:
                     conf = sp.get("confidence")
                 if isinstance(conf, (float, int)):
                     species_conf = f"{float(conf):.2f}"
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("species_json_read_failed path=%s err=%s", sp_path, exc)
         if ml_path.is_file():
             try:
                 det = json.loads(ml_path.read_text(encoding="utf-8"))
@@ -393,8 +397,8 @@ def _frame_records(jobs: list[dict[str, object]]) -> list[dict[str, str]]:
                         c = top.get("confidence")
                         if isinstance(c, (float, int)):
                             det_conf = f"{float(c):.2f}"
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("ml_json_read_failed path=%s err=%s", ml_path, exc)
         species_short = _species_short_name(species)
         species_latin = _species_latin_name(species)
         desc = (
@@ -939,21 +943,21 @@ async def resume() -> RedirectResponse:
 @app.get("/retry/{job_id}")
 async def retry(job_id: int) -> RedirectResponse:
     db.retry_job(job_id)
-    logger.info("job_id=%s action=retry", job_id)
+    logger.info("action=retry")
     return RedirectResponse(url="/", status_code=303)
 
 
 @app.get("/cancel/{job_id}")
 async def cancel(job_id: int) -> RedirectResponse:
     db.cancel_job(job_id)
-    logger.info("job_id=%s action=cancel", job_id)
+    logger.info("action=cancel")
     return RedirectResponse(url="/", status_code=303)
 
 
 @app.get("/pause-job/{job_id}")
 async def pause_job(job_id: int) -> RedirectResponse:
     db.cancel_job(job_id)
-    logger.info("job_id=%s action=pause_job", job_id)
+    logger.info("action=pause_job")
     return RedirectResponse(url="/", status_code=303)
 
 
@@ -966,7 +970,7 @@ async def continue_job(job_id: int) -> RedirectResponse:
     if status == "queued":
         return RedirectResponse(url="/", status_code=303)
     db.resume_job(job_id)
-    logger.info("job_id=%s action=continue_job_resume", job_id)
+    logger.info("action=continue_job_resume")
     return RedirectResponse(url="/", status_code=303)
 
 
@@ -999,15 +1003,15 @@ async def reset_all() -> RedirectResponse:
             if f.is_file():
                 try:
                     f.unlink()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("reset_all_input_cleanup_failed path=%s err=%s", f, exc)
     if video_dir.is_dir():
         for f in video_dir.glob("*"):
             if f.is_file():
                 try:
                     f.unlink()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("reset_all_video_cleanup_failed path=%s err=%s", f, exc)
     _ensure_dir_gitkeep(output_dir)
     _ensure_dir_gitkeep(input_dir)
     _ensure_dir_gitkeep(video_dir)
@@ -1026,8 +1030,8 @@ def _same_origin_referer_or(request: Request, default: str = "/") -> str:
         b = urlparse(str(request.base_url))
         if r.scheme == b.scheme and r.netloc == b.netloc and r.path:
             return ref
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("same_origin_referer_parse_failed referer=%s err=%s", _safe_log_value(ref), exc)
     return default
 
 
@@ -1083,8 +1087,8 @@ async def browse_output(job_id: int) -> HTMLResponse:
                 conf = sp.get("score")
                 if isinstance(conf, (float, int)):
                     species_conf = f"{float(conf):.2f}"
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("browse_output_species_json_failed path=%s err=%s", sp_path, exc)
         if ml_path.is_file():
             try:
                 det = json.loads(ml_path.read_text(encoding="utf-8"))
@@ -1096,8 +1100,8 @@ async def browse_output(job_id: int) -> HTMLResponse:
                         c = top.get("confidence")
                         if isinstance(c, (float, int)):
                             det_conf = f"{float(c):.2f}"
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("browse_output_ml_json_failed path=%s err=%s", ml_path, exc)
         rel = ann.relative_to(ROOT).as_posix()
         sp_short = _species_short_name(species)
         sp_latin = _species_latin_name(species)
@@ -1161,16 +1165,16 @@ async def reset_generated_media() -> RedirectResponse:
                 try:
                     f.unlink()
                     removed_in += 1
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("reset_generated_media_input_cleanup_failed path=%s err=%s", f, exc)
     if video_dir.is_dir():
         for f in video_dir.glob("*"):
             if f.is_file():
                 try:
                     f.unlink()
                     removed_vid += 1
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("reset_generated_media_video_cleanup_failed path=%s err=%s", f, exc)
     _ensure_dir_gitkeep(input_dir)
     _ensure_dir_gitkeep(video_dir)
     logger.info(
