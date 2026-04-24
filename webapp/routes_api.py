@@ -482,17 +482,17 @@ def register_api_routes(
             # Fallback for older jobs where outputs_json is absent but output artifacts exist.
             out_dir = _job_output_dir(j)
             if out_dir is not None:
-                    known_stems: set[str] = set()
-                    for ann in out_dir.glob("*.annotated.jpg"):
-                        base = re.sub(r"\.annotated\.jpg$", "", ann.name, flags=re.IGNORECASE).strip()
-                        if base:
-                            known_stems.add(base.lower())
-                    bn = _basename_only(str(body.input_path or ""))
-                    stem_lc = Path(bn).stem.lower() if bn else ""
-                    if stem_lc and stem_lc in known_stems:
-                        trusted = _trusted_input_path_for_stem(outputs, stem_lc, roots)
-                        if trusted is not None:
-                            allowed_inputs.add(trusted)
+                known_stems: set[str] = set()
+                for ann in out_dir.glob("*.annotated.jpg"):
+                    base = re.sub(r"\.annotated\.jpg$", "", ann.name, flags=re.IGNORECASE).strip()
+                    if base:
+                        known_stems.add(base.lower())
+                bn = _basename_only(str(body.input_path or ""))
+                stem_lc = Path(bn).stem.lower() if bn else ""
+                if stem_lc and stem_lc in known_stems:
+                    trusted = _trusted_input_path_for_stem(outputs, stem_lc, roots)
+                    if trusted is not None:
+                        allowed_inputs.add(trusted)
         if not allowed_inputs:
             return JSONResponse(
                 {"ok": False, "error": "No recorded frames found for this job yet."},
@@ -507,15 +507,15 @@ def register_api_routes(
             # Allow rerun when requested frame stem maps to this job's annotated outputs.
             out_dir = _job_output_dir(j)
             if out_dir is not None:
-                    known_stems: set[str] = set()
-                    for ann in out_dir.glob("*.annotated.jpg"):
-                        base = re.sub(r"\.annotated\.jpg$", "", ann.name, flags=re.IGNORECASE).strip()
-                        if base:
-                            known_stems.add(base.lower())
-                    bn = _basename_only(raw_path)
-                    stem_lc = Path(bn).stem.lower() if bn else ""
-                    if stem_lc and stem_lc in known_stems:
-                        matched_input = _trusted_input_path_for_stem(outputs, stem_lc, roots)
+                known_stems: set[str] = set()
+                for ann in out_dir.glob("*.annotated.jpg"):
+                    base = re.sub(r"\.annotated\.jpg$", "", ann.name, flags=re.IGNORECASE).strip()
+                    if base:
+                        known_stems.add(base.lower())
+                bn = _basename_only(raw_path)
+                stem_lc = Path(bn).stem.lower() if bn else ""
+                if stem_lc and stem_lc in known_stems:
+                    matched_input = _trusted_input_path_for_stem(outputs, stem_lc, roots)
         if matched_input is None:
             return JSONResponse({"ok": False, "error": "Frame is not part of this job."}, status_code=403)
         try:
@@ -525,16 +525,14 @@ def register_api_routes(
             raw_name = _basename_only(raw_path)
             stem = Path(raw_name).stem if raw_name else ""
             recovered: Path | None = None
-            out_dir_raw = str(j.get("output_dir") or "").strip()
-            if out_dir_raw and stem:
-                out_dir = Path(out_dir_raw)
-                if out_dir.is_dir():
-                    ext_candidates = [".jpg", ".jpeg", ".png", ".webp"]
-                    for ext in ext_candidates:
-                        c = out_dir / f"{stem}{ext}"
-                        if c.is_file():
-                            recovered = c
-                            break
+            out_dir = _job_output_dir(j)
+            if out_dir is not None and stem:
+                ext_candidates = [".jpg", ".jpeg", ".png", ".webp"]
+                for ext in ext_candidates:
+                    c = _safe_join_file_under_dir(out_dir, f"{stem}{ext}")
+                    if c is not None and c.is_file():
+                        recovered = c
+                        break
             if recovered is None and raw_name:
                 repo_root = Path(__file__).resolve().parents[1]
                 default_input = repo_root / "test-media" / "input"
@@ -546,12 +544,12 @@ def register_api_routes(
                 except OSError:
                     runtime_input = None
                 if runtime_input is not None:
-                    c = runtime_input / raw_name
-                    if c.is_file():
+                    c = _safe_join_file_under_dir(runtime_input, raw_name)
+                    if c is not None and c.is_file():
                         recovered = c
                 if recovered is None:
-                    c = default_input / raw_name
-                    if c.is_file():
+                    c = _safe_join_file_under_dir(default_input, raw_name)
+                    if c is not None and c.is_file():
                         recovered = c
             if recovered is None:
                 return JSONResponse({"ok": False, "error": "Input frame not found."}, status_code=400)
@@ -560,9 +558,9 @@ def register_api_routes(
             return JSONResponse({"ok": False, "error": "Input path must be a file."}, status_code=400)
         if resolved.suffix.lower() not in (".jpg", ".jpeg", ".png", ".webp"):
             return JSONResponse({"ok": False, "error": "Only image frames can be re-run."}, status_code=400)
-        out_dir_raw = str(j.get("output_dir") or "").strip()
-        if out_dir_raw:
-            out_dir = Path(out_dir_raw)
+        job_out = _job_output_dir(j)
+        if job_out is not None:
+            out_dir = job_out
         else:
             repo_root = Path(__file__).resolve().parents[1]
             default_output = Path(db.get_control("runtime_output_dir", str(repo_root / "test-media" / "output")))
