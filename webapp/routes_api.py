@@ -20,6 +20,41 @@ from pydantic import BaseModel, Field
 from webapp.pipeline import process_images
 
 
+def _basename_only(raw: str) -> str:
+    """Return a single filename segment from user input (no parent paths)."""
+    s = (raw or "").strip()
+    if not s:
+        return ""
+    norm = os.path.normpath(os.path.expanduser(s))
+    base = os.path.basename(norm)
+    if not base or base in (".", ".."):
+        return ""
+    return base
+
+
+def _trusted_input_path_for_stem(outputs: list[Any], stem_lc: str) -> Path | None:
+    """Pick an on-disk input path from persisted job outputs only (never from user-resolved paths)."""
+    want = stem_lc.lower()
+    for row in outputs:
+        if not isinstance(row, dict):
+            continue
+        ann = str(row.get("annotated") or "").strip()
+        if not ann:
+            continue
+        ann_base = os.path.basename(ann.replace("\\", "/"))
+        base = re.sub(r"\.annotated\.jpg$", "", ann_base, flags=re.IGNORECASE).strip()
+        if base.lower() != want:
+            continue
+        p_in = str(row.get("input") or "").strip()
+        if not p_in:
+            continue
+        try:
+            return Path(p_in).resolve(strict=False)
+        except OSError:
+            continue
+    return None
+
+
 class EnqueueFolderPreviewIn(BaseModel):
     """Define request payload for folder queue preview."""
     folder_path: str
@@ -120,8 +155,12 @@ def register_api_routes(
         candidate = Path(candidate_str)
         try:
             resolved = candidate.resolve(strict=True)
-        except Exception:
+        except OSError:
             return None, "Folder not found."
+        try:
+            resolved.relative_to(video_root_real)
+        except ValueError:
+            return None, "Folder must be inside runtime video folder."
         if not resolved.is_dir():
             return None, "Folder path must be a directory."
         return resolved, None
@@ -333,32 +372,36 @@ def register_api_routes(
         if not j:
             return JSONResponse({"ok": False, "error": "Job not found."}, status_code=404)
 
-        # Only allow rerun for frames already associated with this job.
-        allowed_inputs: set[Path] = set()
+        outputs: list[Any] = []
         raw_outputs = j.get("outputs_json")
         if raw_outputs:
             try:
-                outputs = json.loads(str(raw_outputs))
+                parsed = json.loads(str(raw_outputs))
+                if isinstance(parsed, list):
+                    outputs = parsed
             except Exception:
                 outputs = []
-            if isinstance(outputs, list):
-                for row in outputs:
-                    if not isinstance(row, dict):
-                        continue
-                    p_in = str(row.get("input") or "").strip()
-                    if not p_in:
-                        continue
-                    try:
-                        allowed_inputs.add(Path(p_in).resolve(strict=False))
-                    except Exception:
-                        continue
+
+        # Only allow rerun for frames already associated with this job.
+        allowed_inputs: set[Path] = set()
+        if outputs:
+            for row in outputs:
+                if not isinstance(row, dict):
+                    continue
+                p_in = str(row.get("input") or "").strip()
+                if not p_in:
+                    continue
+                try:
+                    allowed_inputs.add(Path(p_in).resolve(strict=False))
+                except OSError:
+                    continue
         if not allowed_inputs:
             # Single-image jobs may not have outputs_json populated yet in some test/migration states.
             raw_job_input = str(j.get("input_path") or "").strip()
             if raw_job_input:
                 try:
                     job_input_resolved = Path(raw_job_input).resolve(strict=False)
-                except Exception:
+                except OSError:
                     job_input_resolved = None
                 if job_input_resolved is not None:
                     allowed_inputs.add(job_input_resolved)
@@ -373,14 +416,12 @@ def register_api_routes(
                         base = re.sub(r"\.annotated\.jpg$", "", ann.name, flags=re.IGNORECASE).strip()
                         if base:
                             known_stems.add(base.lower())
-                    raw_candidate = str(body.input_path or "").strip()
-                    if raw_candidate:
-                        try:
-                            req_path = Path(raw_candidate).expanduser().resolve(strict=False)
-                        except Exception:
-                            req_path = None
-                        if req_path is not None and req_path.stem.lower() in known_stems:
-                            allowed_inputs.add(req_path)
+                    bn = _basename_only(str(body.input_path or ""))
+                    stem_lc = Path(bn).stem.lower() if bn else ""
+                    if stem_lc and stem_lc in known_stems:
+                        trusted = _trusted_input_path_for_stem(outputs, stem_lc)
+                        if trusted is not None:
+                            allowed_inputs.add(trusted)
         if not allowed_inputs:
             return JSONResponse(
                 {"ok": False, "error": "No recorded frames found for this job yet."},
@@ -402,23 +443,21 @@ def register_api_routes(
                         base = re.sub(r"\.annotated\.jpg$", "", ann.name, flags=re.IGNORECASE).strip()
                         if base:
                             known_stems.add(base.lower())
-                    try:
-                        req_path = Path(raw_path).expanduser().resolve(strict=False)
-                    except Exception:
-                        req_path = None
-                    if req_path is not None and req_path.stem.lower() in known_stems:
-                        matched_input = req_path
+                    bn = _basename_only(raw_path)
+                    stem_lc = Path(bn).stem.lower() if bn else ""
+                    if stem_lc and stem_lc in known_stems:
+                        matched_input = _trusted_input_path_for_stem(outputs, stem_lc)
         if matched_input is None:
             return JSONResponse({"ok": False, "error": "Frame is not part of this job."}, status_code=403)
         try:
             resolved = matched_input.resolve(strict=True)
-        except Exception:
+        except OSError:
             # Fallback: reconstruct likely frame path for legacy/partial jobs.
-            raw_name = Path(raw_path).name
-            stem = Path(raw_path).stem
+            raw_name = _basename_only(raw_path)
+            stem = Path(raw_name).stem if raw_name else ""
             recovered: Path | None = None
             out_dir_raw = str(j.get("output_dir") or "").strip()
-            if out_dir_raw:
+            if out_dir_raw and stem:
                 out_dir = Path(out_dir_raw)
                 if out_dir.is_dir():
                     ext_candidates = [".jpg", ".jpeg", ".png", ".webp"]
@@ -428,13 +467,14 @@ def register_api_routes(
                             recovered = c
                             break
             if recovered is None and raw_name:
+                repo_root = Path(__file__).resolve().parents[1]
+                default_input = repo_root / "test-media" / "input"
+                runtime_input: Path | None = None
                 try:
-                    repo_root = Path(__file__).resolve().parents[1]
-                    default_input = repo_root / "test-media" / "input"
                     runtime_input = Path(
                         str(db.get_control("runtime_input_dir", str(default_input)) or str(default_input))
                     ).expanduser().resolve(strict=False)
-                except Exception:
+                except OSError:
                     runtime_input = None
                 if runtime_input is not None:
                     c = runtime_input / raw_name

@@ -44,7 +44,8 @@ from webapp.ui_render import render_home_page_html, render_output_browser_page
 from webapp.worker import run_worker_loop
 
 ROOT = Path(__file__).resolve().parents[1]
-DB_PATH = ROOT / "data" / "webapp_jobs.sqlite"
+_db_override = (os.environ.get("WILDLIFE_JOBS_DB") or "").strip()
+DB_PATH = Path(_db_override).expanduser() if _db_override else ROOT / "data" / "webapp_jobs.sqlite"
 LOG_DIR = ROOT / "logs"
 LOG_FILE = LOG_DIR / "webapp.log"
 
@@ -55,8 +56,10 @@ _trailcam_overlay_cache: dict[str, dict[str, str]] = {}
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    _normalize_persisted_species_labels_once()
-    threading.Thread(target=_worker_loop, daemon=True).start()
+    # When WILDLIFE_WEBAPP_SKIP_WORKER=1 (pytest), skip migration + background worker.
+    if os.environ.get("WILDLIFE_WEBAPP_SKIP_WORKER", "").strip().lower() not in ("1", "true", "yes", "on"):
+        _normalize_persisted_species_labels_once()
+        threading.Thread(target=_worker_loop, daemon=True).start()
     yield
 
 
@@ -598,8 +601,8 @@ def _extract_trailcam_overlay_fields(image_path: Path) -> dict[str, str]:
                     try:
                         big = bw.resize((max(1, bw.width * 2), max(1, bw.height * 2)))
                         texts.append(_ocr_footer_png(big))
-                    except Exception:
-                        pass
+                    except (ValueError, OSError, MemoryError) as exc:
+                        logger.debug("trailcam_overlay_resize_skipped err=%s", exc)
             text = "\n".join(t for t in texts if t)
         out["overlay_temp"] = _best_temp_from_text(text)
         if not out["overlay_temp"]:
