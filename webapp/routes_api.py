@@ -7,6 +7,7 @@ Function index:
 - register_api_routes: register all `/api/*` and `/export/*` endpoints.
 """
 
+import logging
 import os
 import json
 import re
@@ -20,6 +21,8 @@ from pydantic import BaseModel, Field
 from webapp.jobs_db import JobsDb
 from webapp.pipeline import process_images
 from webapp.runtime_paths import runtime_dirs
+
+_log = logging.getLogger(__name__)
 
 
 def _basename_only(raw: str) -> str:
@@ -70,8 +73,8 @@ def _roots_for_job(db: JobsDb, job: Any) -> list[Path]:
             od = Path(out_raw).expanduser().resolve(strict=False)
             if od.is_dir():
                 roots.append(od)
-        except OSError:
-            pass
+        except OSError as exc:
+            _log.debug("roots_for_job_skip_output_dir err=%s", exc)
     return roots
 
 
@@ -192,16 +195,17 @@ def register_api_routes(
         raw_video_root = db.get_control("runtime_video_dir", str(default_video_root))
         try:
             video_root = Path(raw_video_root).expanduser()
-        except Exception:
+        except (OSError, TypeError, ValueError):
             video_root = default_video_root
         try:
             video_root_real = video_root.resolve(strict=True)
-        except Exception:
+        except OSError:
             return None, "Runtime video folder is unavailable."
 
         # Restrict folder input to runtime_video_dir (relative or in-root absolute).
         expanded = os.path.expanduser(raw)
         video_root_real_str = os.path.realpath(str(video_root_real))
+        normalized_rel = ""
         if os.path.isabs(expanded):
             candidate_str = os.path.realpath(expanded)
         else:
@@ -223,8 +227,18 @@ def register_api_routes(
                 )
             return None, f"Folder must be inside runtime video folder: {video_root_real}"
 
+        # Build Path only from trusted video_root + relative segment (not from raw candidate_str).
+        if os.path.isabs(expanded):
+            try:
+                rel_to_join = os.path.relpath(candidate_str, video_root_real_str)
+            except ValueError:
+                return None, "Invalid folder path."
+        else:
+            rel_to_join = normalized_rel
+        if any(p == ".." for p in Path(rel_to_join).parts):
+            return None, "Invalid folder path."
         try:
-            resolved = Path(candidate_str).resolve(strict=True)
+            resolved = (video_root_real / rel_to_join).resolve(strict=True)
         except OSError:
             return None, "Folder not found."
         try:
