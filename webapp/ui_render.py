@@ -563,6 +563,27 @@ function isBlankRecord(r) {{
   if (s.toLowerCase().includes('__blank')) return true;
   return lastTaxonSegment(s).toLowerCase() === 'blank';
 }}
+function frameRecordsSignature(records) {{
+  if (!Array.isArray(records)) return '';
+  const parts = [];
+  for (let i = 0; i < records.length; i++) {{
+    const r = records[i];
+    parts.push(
+      String((r && r.annotated_rel) || ''),
+      String((r && r.species) || ''),
+      String((r && r.description) || ''),
+      String((r && r.manual_tag) || ''),
+      String((r && r.job_id) || ''),
+      String((r && r.species_short) || ''),
+      String((r && r.species_candidates_json) || ''),
+      String((r && r.detector_objects_json) || ''),
+      String((r && r.overlay_date) || ''),
+      String((r && r.overlay_time) || ''),
+      String((r && r.overlay_temp) || ''),
+    );
+  }}
+  return String(records.length) + '\\x1e' + parts.join('\\x1f');
+}}
 function formatSpeciesLabel(r) {{
   if (!r) return '—';
   if (isBlankRecord(r)) return 'No species match (blank)';
@@ -1501,6 +1522,8 @@ function renderVideoBrowser() {{
   const fList = document.getElementById('frameList');
   const prevBox = document.getElementById('inlinePreview');
   if (!vList || !fList) return;
+  const prevVScroll = vList.scrollTop || 0;
+  const prevFScroll = fList.scrollTop || 0;
   if (videoNames.length === 0) {{
     vList.innerHTML = "<div class='job-meta'>No sources with visible frames" + (hideBlanks ? " — <b>Settings</b>: turn off &quot;Hide blank…&quot; if every frame is blank." : "") + "</div>";
     fList.innerHTML = "<div class='job-meta'>No frames to show</div>";
@@ -1556,6 +1579,10 @@ function renderVideoBrowser() {{
   }});
   const first = frames.find((x) => String(x.annotated_rel) === ACTIVE_FRAME) || frames[0];
   renderInlinePreview(first || null);
+  requestAnimationFrame(() => {{
+    vList.scrollTop = prevVScroll;
+    fList.scrollTop = prevFScroll;
+  }});
 }}
 async function queueSelectedFiles() {{
   setInlineMsg('quickUploadMsg', '');
@@ -1912,6 +1939,7 @@ function refreshSummaryFromLiveJobs(jobs) {{
 }}
 let _jobsPollTimer = null;
 let _resultsPollTimer = null;
+let _frameRecordsSig = '';
 const _jobStateCache = new Map();
 async function refreshRunsJobs() {{
   try {{
@@ -2018,6 +2046,14 @@ async function refreshResultsRecords() {{
     if (!res.ok) return;
     const data = await res.json();
     if (!data || !data.ok || !Array.isArray(data.records)) return;
+    const nextSig = frameRecordsSignature(data.records);
+    if (nextSig === _frameRecordsSig) {{
+      if (!data.has_active) {{
+        stopResultsPolling();
+      }}
+      return;
+    }}
+    _frameRecordsSig = nextSig;
     FRAME_RECORDS = data.records;
     renderResultsBodyFromRecords();
     renderTagFilterChips();
@@ -2061,6 +2097,7 @@ if (browserDetailCb) browserDetailCb.checked = !!SHOW_BROWSER_DETAILS;
 attachImageClickHandlers();
 renderTagFilterChips();
 renderVideoBrowser();
+_frameRecordsSig = frameRecordsSignature(FRAME_RECORDS);
 syncRunsPollingForVisibleTab();
 syncResultsPollingForVisibleTab();
 </script>

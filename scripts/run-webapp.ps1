@@ -49,5 +49,5 @@ function Stop-ExistingWebapp {
 # --- Dependencies + app launch ---
 Ensure-Ffmpeg
 Stop-ExistingWebapp
-python -m pip install -r requirements-webapp.txt
+python -m pip install -q --disable-pip-version-check -r requirements-webapp.txt
 python -m uvicorn webapp.app:app --host 127.0.0.1 --port 8110
