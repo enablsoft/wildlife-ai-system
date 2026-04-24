@@ -30,6 +30,9 @@ def species_string_is_blank(species: str) -> bool:
     sp = (species or "").lower()
     if "__blank" in sp:
         return True
+    norm = " ".join(sp.replace("_", " ").replace(";", " ").split())
+    if "no cv result" in norm or norm in {"no cv", "no result", "no species", "none", "n/a"}:
+        return True
     return last_taxon_segment(species or "").lower() == "blank"
 
 

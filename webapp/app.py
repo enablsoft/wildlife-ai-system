@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageEnhance, ImageOps
 
@@ -34,6 +34,7 @@ from webapp.export_utils import (
     export_frames_xlsx,
     format_species_display,
     record_is_blank,
+    species_string_is_blank,
 )
 from webapp.jobs_db import create_jobs_db
 from webapp.pipeline import SUPPORTED_IMAGES, SUPPORTED_VIDEOS, extract_frames, process_images
@@ -185,8 +186,24 @@ def _enqueue_uploaded_file(
 def _clean_species(value: str | None) -> str:
     if not value:
         return "Unknown"
+    def _is_no_cv_token(token: str) -> bool:
+        t = token.strip().lower().replace("_", " ")
+        t = " ".join(t.split())
+        return t in {
+            "no cv result",
+            "nocvresult",
+            "no cv",
+            "no result",
+            "no species",
+            "none",
+            "n/a",
+        }
     raw = value.replace("_", " ").strip()
     parts = [p.strip() for p in raw.split(";") if p.strip()]
+    if parts and all(_is_no_cv_token(p) for p in parts):
+        return "__Blank"
+    if _is_no_cv_token(raw):
+        return "__Blank"
     # Some classifiers prefix taxonomy with a UUID-like dataset/model key.
     # Keep user-facing species labels readable by dropping that leading token.
     if parts:
@@ -248,6 +265,20 @@ def _species_short_name(species: str) -> str:
 
 def _species_latin_name(species: str) -> str:
     parts = [p.strip() for p in (species or "").split(";") if p.strip()]
+    if parts and " " in parts[-1]:
+        if len(parts) >= 6:
+            # Taxonomy layout is commonly:
+            # class;order;family;genus;species;common_name
+            genus = parts[-3].replace("_", " ").strip().title()
+            epithet = parts[-2].replace("_", " ").strip().title()
+            return f"{genus} {epithet}".strip()
+        # If only a common-name tail is present (missing species slot), keep genus only.
+        if len(parts) >= 2:
+            return parts[-2].replace("_", " ").strip().title()
+    if len(parts) >= 6:
+        genus = parts[-3].replace("_", " ").strip().title()
+        epithet = parts[-2].replace("_", " ").strip().title()
+        return f"{genus} {epithet}".strip()
     if len(parts) >= 2:
         genus = parts[-2].replace("_", " ").strip().title()
         epithet = parts[-1].replace("_", " ").strip().title()
@@ -259,7 +290,9 @@ def _species_latin_name(species: str) -> str:
 
 def _species_type_tag(species: str) -> str:
     s = (species or "").lower()
-    if not s or "__blank" in s:
+    if not s or "__blank" in s or "no cv result" in s:
+        return ""
+    if species_string_is_blank(species or ""):
         return ""
     checks = [
         ("bird", ["aves", "bird"]),
@@ -274,6 +307,121 @@ def _species_type_tag(species: str) -> str:
         if any(k in s for k in keys):
             return tag
     return "animal"
+
+
+def _extract_species_candidates(payload: dict[str, Any]) -> list[tuple[str, str]]:
+    """Extract top species candidates as (label, confidence_text)."""
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    min_score = 0.02
+
+    def _push(label_raw: Any, score_raw: Any, *, allow_blank_label: bool = False) -> None:
+        label = _clean_species(str(label_raw or "").strip())
+        if not label or label.lower() == "unknown":
+            return
+        if (not allow_blank_label) and species_string_is_blank(label):
+            return
+        key = label.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        conf = ""
+        if isinstance(score_raw, (float, int)):
+            if float(score_raw) < min_score and not allow_blank_label:
+                return
+            conf = f"{float(score_raw):.2f}"
+        out.append((label, conf))
+
+    _push(payload.get("prediction"), payload.get("score"), allow_blank_label=True)
+    _push(payload.get("prediction"), payload.get("prediction_score"), allow_blank_label=True)
+    _push(payload.get("prediction"), payload.get("confidence"), allow_blank_label=True)
+
+    for key in ("predictions", "candidates", "top_predictions", "results", "classes"):
+        v = payload.get(key)
+        if not isinstance(v, list):
+            continue
+        for it in v:
+            if not isinstance(it, dict):
+                continue
+            label_raw = (
+                it.get("prediction")
+                or it.get("label")
+                or it.get("species")
+                or it.get("name")
+                or it.get("class")
+                or ""
+            )
+            score_raw = it.get("score")
+            if not isinstance(score_raw, (float, int)):
+                score_raw = it.get("confidence")
+            if not isinstance(score_raw, (float, int)):
+                score_raw = it.get("probability")
+            _push(label_raw, score_raw)
+            if len(out) >= 5:
+                return out
+    # SpeciesNet-style payloads often carry rich candidates under raw.classifications.
+    raw = payload.get("raw")
+    if isinstance(raw, dict):
+        cls = raw.get("classifications")
+        if isinstance(cls, dict):
+            classes = cls.get("classes")
+            scores = cls.get("scores")
+            if isinstance(classes, list):
+                for idx, label_raw in enumerate(classes):
+                    score_raw: Any = ""
+                    if isinstance(scores, list) and idx < len(scores):
+                        score_raw = scores[idx]
+                    _push(label_raw, score_raw)
+                    if len(out) >= 5:
+                        return out
+    return out[:5]
+
+
+def _extract_detector_objects(payload: dict[str, Any]) -> list[tuple[str, str]]:
+    """Extract detector objects as (class, confidence_text)."""
+    objs = payload.get("objects")
+    if not isinstance(objs, list):
+        return []
+    out: list[tuple[str, str]] = []
+    for it in objs:
+        if not isinstance(it, dict):
+            continue
+        cls = str(it.get("class") or "").replace("_", " ").strip()
+        if not cls:
+            continue
+        conf = ""
+        c = it.get("confidence")
+        if isinstance(c, (float, int)):
+            conf = f"{float(c):.2f}"
+        out.append((cls, conf))
+        if len(out) >= 8:
+            break
+    return out
+
+
+def _refine_species_for_display(
+    species: str,
+    species_conf: str,
+    species_candidates: list[tuple[str, str]],
+    detector_objects: list[tuple[str, str]],
+) -> tuple[str, str, list[tuple[str, str]]]:
+    """Reduce misleading labels for generic/no-box frames."""
+    if detector_objects:
+        return species, species_conf, species_candidates
+    if species_string_is_blank(species or "") or str(species or "").strip().lower() in ("unknown", "__blank"):
+        return species, species_conf, species_candidates
+    primary_tag = _species_type_tag(species)
+    if primary_tag not in ("", "animal", "mammal"):
+        return species, species_conf, species_candidates
+
+    bird_candidates = [(label, conf) for label, conf in species_candidates if _species_type_tag(label) == "bird"]
+    if not bird_candidates:
+        return species, species_conf, species_candidates
+
+    top_bird_label, top_bird_conf = bird_candidates[0]
+    filtered: list[tuple[str, str]] = [(species, species_conf)] if species else []
+    filtered.extend(bird_candidates[:4])
+    return top_bird_label, top_bird_conf or species_conf, filtered[:5]
 
 
 def _normalize_tags_csv(raw: str) -> str:
@@ -316,41 +464,153 @@ def _extract_trailcam_overlay_fields(image_path: Path) -> dict[str, str]:
     if not tesseract_bin:
         _trailcam_overlay_cache[key] = out
         return out
+    def _normalize_mmddyy(date_raw: str) -> str:
+        m = re.fullmatch(r"(\d{2})/(\d{2})/(\d{2,4})", (date_raw or "").strip())
+        if not m:
+            return ""
+        mm, dd, yy = m.group(1), m.group(2), m.group(3)
+        if len(yy) == 2:
+            y = int(yy)
+            yy = f"20{y:02d}" if y <= 79 else f"19{y:02d}"
+        return f"{mm}/{dd}/{yy}"
+
+    def _best_date_from_text(text: str) -> str:
+        blob = re.sub(r"\s+", " ", (text or "").replace("\n", " "))
+        four = list(re.finditer(r"\b(\d{2})/(\d{2})/(\d{4})\b", blob))
+        if four:
+
+            def _score_date(m: re.Match[str]) -> tuple[int, str]:
+                raw = m.group(0)
+                norm = _normalize_mmddyy(raw)
+                try:
+                    yyyy = int(norm.split("/")[2])
+                except Exception:
+                    yyyy = 0
+                pri = 0
+                if 2015 <= yyyy <= 2035:
+                    pri += 5
+                if raw.count("/") == 2 and len(m.group(3)) == 4:
+                    pri += 2
+                return (pri, norm)
+
+            scored = sorted((_score_date(m) for m in four), key=lambda x: x[0], reverse=True)
+            return scored[0][1] if scored else _normalize_mmddyy(four[0].group(0))
+        # OCR sometimes merges separators into an 8-digit run like "03192025" (often near the time).
+        tim = re.search(r"\b(\d{1,2}:\d{2}\s*[AP]M)\b", blob, flags=re.IGNORECASE)
+        if tim:
+            window = blob[max(0, tim.start() - 40) : min(len(blob), tim.end() + 10)]
+            digits = re.sub(r"\D+", "", window)
+            cands: list[str] = []
+            pos = 0
+            while pos + 8 <= len(digits):
+                chunk = digits[pos : pos + 8]
+                mm, dd, yyyy = chunk[0:2], chunk[2:4], chunk[4:8]
+                if 1 <= int(mm) <= 12 and 1 <= int(dd) <= 31 and int(yyyy) >= 1990:
+                    cands.append(_normalize_mmddyy(f"{mm}/{dd}/{yyyy}"))
+                pos += 1
+            if cands:
+                def _y(s: str) -> int:
+                    try:
+                        return int(s.split("/")[2])
+                    except Exception:
+                        return 0
+
+                cands.sort(key=lambda s: abs(_y(s) - 2026))
+                return cands[0]
+        two = list(re.finditer(r"\b(\d{2})/(\d{2})/(\d{2})\b", blob))
+        if not two:
+            return ""
+        # Prefer a 2-digit year that also appears as a 4-digit year nearby (common OCR split).
+        for m in two:
+            mm, dd, tail = m.group(1), m.group(2), m.group(3)
+            window = blob[max(0, m.start() - 22) : m.end() + 22]
+            m4 = re.search(rf"\b{re.escape(mm)}/{re.escape(dd)}/(20{re.escape(tail)}|19{re.escape(tail)})\b", window)
+            if m4:
+                return _normalize_mmddyy(m4.group(0))
+            if tail == "20":
+                m5 = re.search(rf"\b{re.escape(mm)}/{re.escape(dd)}/(20\d{{2}})\b", window)
+                if m5:
+                    return _normalize_mmddyy(m5.group(0))
+        return _normalize_mmddyy(two[0].group(0))
+
+    def _best_temp_from_text(text: str) -> str:
+        blob = re.sub(r"\s+", " ", (text or "").replace("\n", " "))
+        scored: list[tuple[int, str]] = []
+        for m in re.finditer(r"\b(-?\d{1,3})\s*°?\s*([CF])\b", blob, flags=re.IGNORECASE):
+            try:
+                v = int(m.group(1))
+            except Exception:
+                continue
+            letter = m.group(2).upper()
+            if letter != "C" or not (-55 <= v <= 60):
+                continue
+            pri = 0
+            if 0 <= v <= 45:
+                pri += 2
+            # Prefer temps that appear near a date stamp in the same OCR blob.
+            if re.search(r"\d{2}/\d{2}/\d{2,4}", blob[max(0, m.start() - 30) : m.end() + 30]):
+                pri += 4
+            scored.append((pri, -abs(v), f"{v}{letter}"))
+        if not scored:
+            return ""
+        scored.sort(key=lambda x: (x[0], x[1]))
+        return scored[-1][2]
+
+    def _ocr_footer_png(footer_bin: Image.Image) -> str:
+        tmp = image_path.with_suffix(".ocr_tmp.png")
+        try:
+            footer_bin.save(tmp)
+            chunks: list[str] = []
+            for psm in ("6", "11", "12"):
+                cp = subprocess.run(
+                    [tesseract_bin, str(tmp), "stdout", "--psm", psm],
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    capture_output=True,
+                    check=False,
+                )
+                if cp.returncode == 0 and (cp.stdout or "").strip():
+                    chunks.append(cp.stdout)
+            return "\n".join(chunks)
+        finally:
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception as exc:
+                logger.debug("trailcam_overlay_tmp_cleanup_failed path=%s err=%s", tmp, exc)
+
     try:
         with Image.open(image_path).convert("RGB") as im:
             w, h = im.size
-            y0 = max(0, int(h * 0.83))
-            footer = im.crop((0, y0, w, h)).convert("L")
-            footer = ImageEnhance.Contrast(footer).enhance(2.8)
-            footer = ImageEnhance.Sharpness(footer).enhance(2.0)
-            footer = ImageOps.autocontrast(footer)
-            footer = footer.point(lambda p: 255 if p > 128 else 0)
-            tmp = image_path.with_suffix(".ocr_tmp.png")
-            footer.save(tmp)
-        cp = subprocess.run(
-            [tesseract_bin, str(tmp), "stdout", "--psm", "6"],
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            capture_output=True,
-            check=False,
-        )
-        try:
-            tmp.unlink(missing_ok=True)
-        except Exception as exc:
-            logger.debug("trailcam_overlay_tmp_cleanup_failed path=%s err=%s", tmp, exc)
-        text = (cp.stdout or "") if cp.returncode == 0 else ""
-        tmatch = re.search(r"\b(-?\d{1,2})\s*([CF])\b", text, flags=re.IGNORECASE)
-        # OCR sometimes reads C as 0 in trail-cam stamps (e.g. "110" instead of "11C").
-        if not tmatch:
-            tmatch = re.search(r"\b(-?\d{1,2})0\b", text)
+            texts: list[str] = []
+            for frac in (0.83, 0.80):
+                y0 = max(0, int(h * frac))
+                footer = im.crop((0, y0, w, h)).convert("L")
+                footer = ImageEnhance.Contrast(footer).enhance(2.8)
+                footer = ImageEnhance.Sharpness(footer).enhance(2.0)
+                footer = ImageOps.autocontrast(footer)
+                inv = ImageOps.invert(footer)
+                for base in (footer, inv):
+                    bw = base.point(lambda p: 255 if p > 128 else 0)
+                    texts.append(_ocr_footer_png(bw))
+                    bw2 = base.point(lambda p: 255 if p > 112 else 0)
+                    texts.append(_ocr_footer_png(bw2))
+                    try:
+                        big = bw.resize((max(1, bw.width * 2), max(1, bw.height * 2)))
+                        texts.append(_ocr_footer_png(big))
+                    except Exception:
+                        pass
+            text = "\n".join(t for t in texts if t)
+        out["overlay_temp"] = _best_temp_from_text(text)
+        if not out["overlay_temp"]:
+            tmatch = re.search(r"\b(-?\d{1,2})\s*([CF])\b", text, flags=re.IGNORECASE)
             if tmatch:
-                out["overlay_temp"] = f"{tmatch.group(1)}C"
-        if tmatch and not out["overlay_temp"]:
-            out["overlay_temp"] = f"{tmatch.group(1)}{tmatch.group(2).upper()}"
-        dmatch = re.search(r"\b(\d{2}/\d{2}/\d{4})\b", text)
-        if dmatch:
-            out["overlay_date"] = dmatch.group(1)
+                out["overlay_temp"] = f"{tmatch.group(1)}{tmatch.group(2).upper()}"
+            else:
+                tmatch2 = re.search(r"\b(-?\d{1,2})0\b", text)
+                if tmatch2:
+                    out["overlay_temp"] = f"{tmatch2.group(1)}C"
+        out["overlay_date"] = _best_date_from_text(text)
         timematch = re.search(r"\b(\d{1,2}:\d{2}\s*[AP]M)\b", text, flags=re.IGNORECASE)
         if timematch:
             out["overlay_time"] = re.sub(r"\s+", "", timematch.group(1).upper())
@@ -371,11 +631,15 @@ def _frame_records(jobs: list[dict[str, object]]) -> list[dict[str, str]]:
         species_conf = ""
         det_class = "Unknown"
         det_conf = ""
+        species_candidates: list[tuple[str, str]] = []
+        detector_objects: list[tuple[str, str]] = []
         sp_path = Path(str(row.get("species_json") or ""))
         ml_path = Path(str(row.get("ml_json") or ""))
         if sp_path.is_file():
             try:
                 sp = json.loads(sp_path.read_text(encoding="utf-8"))
+                if isinstance(sp, dict):
+                    species_candidates = _extract_species_candidates(sp)
                 species = _clean_species(str(sp.get("prediction") or "Unknown"))
                 conf = sp.get("score")
                 if not isinstance(conf, (float, int)):
@@ -389,6 +653,8 @@ def _frame_records(jobs: list[dict[str, object]]) -> list[dict[str, str]]:
         if ml_path.is_file():
             try:
                 det = json.loads(ml_path.read_text(encoding="utf-8"))
+                if isinstance(det, dict):
+                    detector_objects = _extract_detector_objects(det)
                 objs = det.get("objects") or []
                 if objs and isinstance(objs, list):
                     top = objs[0]
@@ -399,8 +665,16 @@ def _frame_records(jobs: list[dict[str, object]]) -> list[dict[str, str]]:
                             det_conf = f"{float(c):.2f}"
             except Exception as exc:
                 logger.debug("ml_json_read_failed path=%s err=%s", ml_path, exc)
+        species, species_conf, species_candidates = _refine_species_for_display(
+            species,
+            species_conf,
+            species_candidates,
+            detector_objects,
+        )
         species_short = _species_short_name(species)
         species_latin = _species_latin_name(species)
+        if not species_candidates and species_short and species_short.lower() != "unknown":
+            species_candidates = [(species_short, species_conf)]
         desc = (
             f"Likely {species_short}" + (f" ({species_latin})" if species_latin else "")
             + (f" ({species_conf})" if species_conf else "")
@@ -431,6 +705,14 @@ def _frame_records(jobs: list[dict[str, object]]) -> list[dict[str, str]]:
                 "species_short": species_short,
                 "species_latin": species_latin,
                 "species_type": _species_type_tag(species),
+                "species_candidates_json": json.dumps(
+                    [{"label": l, "confidence": c} for l, c in species_candidates],
+                    ensure_ascii=False,
+                ),
+                "detector_objects_json": json.dumps(
+                    [{"label": l, "confidence": c} for l, c in detector_objects],
+                    ensure_ascii=False,
+                ),
                 **_extract_trailcam_overlay_fields(Path(ann)),
             }
         )
@@ -439,15 +721,33 @@ def _frame_records(jobs: list[dict[str, object]]) -> list[dict[str, str]]:
         rows: list[dict[str, str]] = []
         if not p.is_dir():
             return rows
+        try:
+            repo_root = Path(__file__).resolve().parents[1]
+            default_input = repo_root / "test-media" / "input"
+            runtime_input = Path(
+                str(db.get_control("runtime_input_dir", str(default_input)) or str(default_input))
+            ).expanduser().resolve(strict=False)
+        except Exception:
+            runtime_input = None
+            default_input = Path(__file__).resolve().parents[1] / "test-media" / "input"
         for ann in sorted(p.glob("*.annotated.jpg"), key=lambda x: x.name.lower()):
             base = re.sub(r"\.annotated\.jpg$", "", ann.name, flags=re.IGNORECASE)
             ml = p / f"{base}.ml.json"
             sp = p / f"{base}.species.json"
             if not ml.is_file() or not sp.is_file():
                 continue
+            input_candidate = p / f"{base}.jpg"
+            if runtime_input is not None:
+                runtime_candidate = runtime_input / f"{base}.jpg"
+                if runtime_candidate.is_file():
+                    input_candidate = runtime_candidate
+            if not input_candidate.is_file():
+                fallback_candidate = default_input / f"{base}.jpg"
+                if fallback_candidate.is_file():
+                    input_candidate = fallback_candidate
             rows.append(
                 {
-                    "input": str(p / f"{base}.jpg"),
+                    "input": str(input_candidate),
                     "ml_json": str(ml),
                     "species_json": str(sp),
                     "annotated": str(ann),
@@ -735,6 +1035,10 @@ def _render_page(
             + (r.get("species_latin") or "")
             + " "
             + (r.get("species_type") or "")
+            + " "
+            + (r.get("species_candidates_json") or "")
+            + " "
+            + (r.get("detector_objects_json") or "")
             + " blank no species match"
         )
         manual_tag = str(r.get("manual_tag") or "")
@@ -761,6 +1065,42 @@ def _render_page(
         if manual_bits:
             manual_chips = "".join([f"<span class='tag-chip'>{html.escape(t)}</span>" for t in manual_bits])
             manual_html = f"<div><b>Manual tags:</b></div><div class='tag-list'>{manual_chips}</div>"
+        species_candidates_html = ""
+        detector_objects_html = ""
+        try:
+            species_candidates_parsed = json.loads(str(r.get("species_candidates_json") or "[]"))
+        except Exception:
+            species_candidates_parsed = []
+        if isinstance(species_candidates_parsed, list) and species_candidates_parsed:
+            chips = []
+            for c in species_candidates_parsed[:5]:
+                if not isinstance(c, dict):
+                    continue
+                lbl = str(c.get("label") or "").strip()
+                if not lbl:
+                    continue
+                conf = str(c.get("confidence") or "").strip()
+                txt = f"{lbl} ({conf})" if conf else lbl
+                chips.append(f"<span class='tag-chip'>{html.escape(txt)}</span>")
+            if chips:
+                species_candidates_html = f"<div><b>Species candidates:</b></div><div class='tag-list'>{''.join(chips)}</div>"
+        try:
+            detector_objects_parsed = json.loads(str(r.get("detector_objects_json") or "[]"))
+        except Exception:
+            detector_objects_parsed = []
+        if isinstance(detector_objects_parsed, list) and detector_objects_parsed:
+            chips = []
+            for c in detector_objects_parsed[:8]:
+                if not isinstance(c, dict):
+                    continue
+                lbl = str(c.get("label") or "").strip()
+                if not lbl:
+                    continue
+                conf = str(c.get("confidence") or "").strip()
+                txt = f"{lbl} ({conf})" if conf else lbl
+                chips.append(f"<span class='tag-chip'>{html.escape(txt)}</span>")
+            if chips:
+                detector_objects_html = f"<div><b>Detected objects:</b></div><div class='tag-list'>{''.join(chips)}</div>"
         latin_html = f"<div><b>Latin:</b> {html.escape(species_latin)}</div>" if species_latin and not is_blank else ""
         taxonomy_html = (
             f"<div><b>Taxonomy:</b> {html.escape(species_full)}</div>"
@@ -785,7 +1125,7 @@ def _render_page(
             f"<div><b>Species:</b> {html.escape(species_disp)}</div>"
             f"{latin_html}"
             f"{taxonomy_html}"
-            f"{default_html}{manual_html}"
+            f"{species_candidates_html}{detector_objects_html}{default_html}{manual_html}"
             f"<div class='desc-col' title='{html.escape(r['description'], quote=True)}'>{html.escape(r['description'])}</div>"
             f"<div style='margin-top:4px' class='actions'>"
             f"<button class='btn btn-subtle' type='button' onclick='editManualTag({rel_js})'>Edit tag</button>"
@@ -909,7 +1249,7 @@ async def process_multi(
     fps: float = Form(1.0),
     ml_url: str = Form("http://127.0.0.1:8010"),
     species_url: str = Form("http://127.0.0.1:8100"),
-) -> RedirectResponse:
+) -> JSONResponse:
     logger.info("process_multi received files=%s", len(media_files))
     queued = 0
     skipped = 0
@@ -923,7 +1263,7 @@ async def process_multi(
             skipped += 1
         else:
             queued += 1
-    return RedirectResponse(url="/", status_code=303)
+    return JSONResponse({"ok": True, "queued": queued, "skipped": skipped, "bad": bad})
 
 
 @app.get("/pause")

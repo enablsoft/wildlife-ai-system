@@ -105,6 +105,20 @@ input{{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:8px;box-siz
 .tag-chip.default{{border-color:#bbf7d0;background:#dcfce7;color:#166534}}
 .tag-chip-filter{{cursor:pointer;user-select:none}}
 .tag-chip-filter.active{{background:#3730a3;color:#fff;border-color:#3730a3}}
+.candidate-table-wrap{{margin-top:4px;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;background:#fff}}
+.candidate-table-wrap .tbl{{font-size:12px}}
+.candidate-table-wrap .tbl th,.candidate-table-wrap .tbl td{{padding:6px 8px;vertical-align:top}}
+.candidate-table-wrap .tbl td.mono{{font-family:Consolas,monospace;font-size:11px;color:#334155;white-space:nowrap}}
+.candidate-table-wrap .tbl tr.type-bird td:first-child{{border-left:3px solid #3b82f6}}
+.candidate-table-wrap .tbl tr.type-mammal td:first-child{{border-left:3px solid #16a34a}}
+.candidate-table-wrap .tbl tr.type-reptile td:first-child{{border-left:3px solid #ea580c}}
+.candidate-table-wrap .tbl tr.type-amphibian td:first-child{{border-left:3px solid #059669}}
+.candidate-table-wrap .tbl tr.type-fish td:first-child{{border-left:3px solid #0284c7}}
+.candidate-table-wrap .tbl tr.type-insect td:first-child{{border-left:3px solid #ca8a04}}
+.candidate-table-wrap .tbl tr.type-arachnid td:first-child{{border-left:3px solid #7c3aed}}
+.candidate-table-wrap .tbl tr.type-animal td:first-child{{border-left:3px solid #64748b}}
+.candidate-table-wrap .tbl tr.type-blank td:first-child{{border-left:3px solid #94a3b8}}
+.candidate-table-wrap .tbl tr.type-detector td:first-child{{border-left:3px solid #e11d48}}
 .browser-row{{display:grid;grid-template-columns:minmax(0,280px) minmax(0,1fr) minmax(0,1fr);gap:12px;align-items:start}}
 .browser-row > div{{min-width:0}}
 .video-list{{max-height:340px;overflow:auto;border:1px solid #e2e8f0;border-radius:8px;padding:8px;background:#fff;box-sizing:border-box}}
@@ -414,6 +428,11 @@ This will:
       <input type='checkbox' id='settingsHideBlanks' style='width:auto;margin-top:4px' {'checked' if hide_blanks else ''} onchange='applyHideBlanksSetting()' />
       <span><b>Hide blank / no-match frames</b> — when checked, those frames are omitted from Frame Results and from the Video Frame Browser lists.</span>
     </label>
+    <div style='height:8px'></div>
+    <label style='font-size:14px;display:flex;align-items:flex-start;gap:10px;cursor:pointer;max-width:52rem'>
+      <input type='checkbox' id='settingsBrowserDetails' style='width:auto;margin-top:4px' onchange='applyBrowserDetailToggle()' />
+      <span><b>Show detailed candidates in Media Frame Browser</b> — species candidates and detected objects in frame list + inline preview.</span>
+    </label>
     <p class='job-meta' style='margin-top:14px'>Changing this reloads the page (frame results reset to page 1; summary page is kept).</p>
   </div>
   <div class='panel' style='margin-top:10px'>
@@ -499,6 +518,7 @@ const TAB_KEY = 'wildlife_ui_active_tab';
 const HAS_ACTIVE = {"true" if has_active else "false"};
 let FRAME_RECORDS = {records_json};
 const HIDE_BLANKS = {"true" if hide_blanks else "false"};
+const BROWSER_DETAIL_KEY = 'wildlife_browser_detail_candidates_v1';
 const SPECIES_MODE = {species_mode!r};
 const DEFAULT_INPUT_DIR = {default_input_label!r};
 const DEFAULT_VIDEO_DIR = {default_video_label!r};
@@ -516,6 +536,13 @@ let _batchOutputOverride = '';
 let _tagEditRel = '';
 let _tagEditSpeciesShort = '';
 const ACTIVE_TAG_FILTERS = new Set();
+let SHOW_BROWSER_DETAILS = true;
+try {{
+  const raw = localStorage.getItem(BROWSER_DETAIL_KEY);
+  SHOW_BROWSER_DETAILS = raw === null ? true : raw !== '0';
+}} catch (_) {{
+  SHOW_BROWSER_DETAILS = true;
+}}
 function lastTaxonSegment(species) {{
   const parts = String(species || '').split(';').map((p) => p.trim());
   for (let i = parts.length - 1; i >= 0; i--) {{
@@ -562,6 +589,95 @@ function trailcamOverlayLabel(r) {{
   if (t) bits.push(t);
   if (temp) bits.push(temp);
   return bits.join(' | ');
+}}
+function parseCandidateList(raw) {{
+  try {{
+    const arr = JSON.parse(String(raw || '[]'));
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter((x) => x && typeof x === 'object')
+      .map((x) => {{
+        const label = String(x.label || '').trim();
+        const confidence = String(x.confidence || '').trim();
+        return {{ label, confidence }};
+      }})
+      .filter((x) => !!x.label);
+  }} catch (_) {{
+    return [];
+  }}
+}}
+function candidateTypeTag(label) {{
+  const s = String(label || '').toLowerCase();
+  if (!s) return '';
+  if (s.includes('aves') || s.includes('bird')) return 'bird';
+  if (s.includes('mammalia') || s.includes('mammal')) return 'mammal';
+  if (s.includes('reptilia') || s.includes('reptile')) return 'reptile';
+  if (s.includes('amphibia') || s.includes('amphib')) return 'amphibian';
+  if (s.includes('actinopterygii') || s.includes('fish')) return 'fish';
+  if (s.includes('insecta') || s.includes('insect')) return 'insect';
+  if (s.includes('arachnida') || s.includes('arachnid') || s.includes('spider')) return 'arachnid';
+  if (s.includes('animal')) return 'animal';
+  return '';
+}}
+function candidateDisplayName(label) {{
+  const parts = String(label || '').split(';').map((p) => p.trim()).filter((p) => !!p);
+  if (parts.length) return parts[parts.length - 1].replace(/_/g, ' ');
+  return String(label || '').replace(/_/g, ' ').trim();
+}}
+function candidateIsBlankish(rawLabel) {{
+  const s = String(rawLabel || '').toLowerCase();
+  if (!s) return true;
+  if (s.includes('__blank')) return true;
+  const parts = s.split(';').map((p) => p.trim()).filter((p) => !!p);
+  const tail = parts.length ? parts[parts.length - 1] : '';
+  return tail === 'blank';
+}}
+function parseConfidence01(confText) {{
+  const t = String(confText || '').trim();
+  if (!t) return null;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : null;
+}}
+function renderCandidateTable(items, limit, kind) {{
+  const minScore = 0.02;
+  const arr0 = Array.isArray(items) ? items : [];
+  const arr = arr0
+    .map((it) => {{
+      const label = String((it && it.label) || '').trim();
+      const confidence = String((it && it.confidence) || '').trim();
+      return {{ label, confidence }};
+    }})
+    .filter((it) => !!it.label)
+    .filter((it) => {{
+      if (kind !== 'species') return true;
+      const sc = parseConfidence01(it.confidence);
+      if (sc === null) return true;
+      if (candidateIsBlankish(it.label)) return true;
+      return sc >= minScore;
+    }})
+    .slice(0, Math.max(0, Number(limit || 0)));
+  if (!arr.length) return '';
+  const rows = arr.map((it, idx) => {{
+    const rawLabel = it.label;
+    const name = candidateDisplayName(rawLabel);
+    const conf = it.confidence;
+    let t = kind === 'species' ? candidateTypeTag(rawLabel) : 'detector';
+    if (kind === 'species' && candidateIsBlankish(rawLabel)) t = 'blank';
+    const typeClass = esc(t || 'animal');
+    return `<tr class='type-${{typeClass}}'>`
+      + `<td class='mono'>#${{idx + 1}}</td>`
+      + `<td><div><b>${{esc(name)}}</b></div><div class='job-meta' title='${{esc(rawLabel)}}'>${{esc(rawLabel)}}</div></td>`
+      + `<td class='mono'>${{esc(conf || '—')}}</td>`
+      + `</tr>`;
+  }}).join('');
+  return (
+    "<div class='candidate-table-wrap'><div class='table-scroll'>"
+    + "<table class='tbl'><thead><tr>"
+    + "<th style='width:52px'>#</th><th>Label</th><th style='width:90px'>Score</th>"
+    + "</tr></thead><tbody>"
+    + rows
+    + "</tbody></table></div></div>"
+  );
 }}
 function formatTrailTemp(tempRaw) {{
   const t = String(tempRaw || '').trim();
@@ -1035,6 +1151,14 @@ function applyHideBlanksSetting() {{
   u.searchParams.set('page', '1');
   window.location.href = u.toString();
 }}
+function applyBrowserDetailToggle() {{
+  const cb = document.getElementById('settingsBrowserDetails');
+  SHOW_BROWSER_DETAILS = !!cb?.checked;
+  try {{
+    localStorage.setItem(BROWSER_DETAIL_KEY, SHOW_BROWSER_DETAILS ? '1' : '0');
+  }} catch (_) {{}}
+  renderVideoBrowser();
+}}
 function applySpeciesModeSetting() {{
   const el = document.getElementById('settingsSpeciesMode');
   if (!el) return;
@@ -1082,9 +1206,14 @@ async function previewExcelExport() {{
       speciesConfRaw ? `- confidence ${{speciesConfRaw}}` : '',
     ].filter((p) => !!p).join(' ');
     const descSpecies = esc(descSpeciesRaw);
+    const detectorList = parseCandidateList(r.detector_objects_json || '[]');
     const detectorClass = String(r.detector_class || '').trim();
     const detectorConf = formatConfidencePercent(r.detector_confidence || '');
-    const descDetector = esc(detectorConf ? `${{detectorClass}} (${{detectorConf}})` : detectorClass);
+    const detFallback = detectorConf ? `${{detectorClass}} (${{detectorConf}})` : detectorClass;
+    const detSummary = detectorList.length
+      ? detectorList.slice(0, 5).map((d) => d.confidence ? `${{d.label}} (${{formatConfidencePercent(d.confidence)}})` : d.label).join(', ')
+      : detFallback;
+    const descDetector = esc(detSummary);
     return `<tr><td>${{esc(String(r.source || ''))}}</td><td>${{esc(String(r.frame || ''))}}</td><td>${{trailcamDate}}</td><td>${{trailcamTime}}</td><td>${{trailcamTemp}}</td><td>${{species}}</td><td>${{latin}}</td><td>${{speciesConf}}</td><td>${{taxonomy}}</td><td>${{shortTag}}</td><td>${{typeTag}}</td><td>${{manual}}</td><td>${{descSpecies}}</td><td>${{descDetector}}</td><td>${{jobId}}</td></tr>`;
   }}).join('');
   const summary = document.getElementById('exportPreviewSummary');
@@ -1329,9 +1458,17 @@ function renderInlinePreview(r) {{
   const taxonomyRaw = fullTaxonomyLabel(r);
   const taxonomy = esc(taxonomyRaw);
   const overlay = esc(trailcamOverlayLabel(r));
+  const speciesCandidates = parseCandidateList(r.species_candidates_json || '[]');
+  const detectorObjects = parseCandidateList(r.detector_objects_json || '[]');
   const frameNo = frameNumberLabel(r.frame || '');
   const frameNoEsc = esc(frameNo);
   const zoomTitle = `${{String(r.frame || '')}} - ${{String(r.source || '')}}`;
+  const speciesCandidatesHtml = (SHOW_BROWSER_DETAILS && speciesCandidates.length)
+    ? `<div class='job-meta'><b>Species candidates:</b></div>${{renderCandidateTable(speciesCandidates, 5, 'species')}}`
+    : '';
+  const detectorObjectsHtml = (SHOW_BROWSER_DETAILS && detectorObjects.length)
+    ? `<div class='job-meta'><b>Detected objects:</b></div>${{renderCandidateTable(detectorObjects, 8, 'detector')}}`
+    : '';
   box.innerHTML = `
     <div><b>${{esc(r.frame)}}</b>${{frameNo ? ` <span class='job-meta'>(${{frameNoEsc}})</span>` : ''}}</div>
     <div class='job-meta'><b>Source:</b> ${{esc(r.source)}}</div>
@@ -1339,6 +1476,8 @@ function renderInlinePreview(r) {{
     ${{latin && !isBlankRecord(r) ? `<div class='job-meta'><b>Latin:</b> ${{latin}}</div>` : ''}}
     ${{taxonomyRaw && !isBlankRecord(r) && taxonomyRaw !== formatSpeciesLabel(r) ? `<div class='job-meta'><b>Taxonomy:</b> ${{taxonomy}}</div>` : ''}}
     ${{overlay ? `<div class='job-meta'><b>Trail-cam stamp:</b> ${{overlay}}</div>` : ''}}
+    ${{speciesCandidatesHtml}}
+    ${{detectorObjectsHtml}}
     <img src="${{src}}" alt="frame preview" loading="lazy" />
     <div class='job-meta'>${{esc(r.description || '')}}</div>
     <div><button class='btn btn-subtle' type='button' onclick="openViewer('${{src}}','${{zoomTitle.replace(/'/g, "\\\\'")}}')">Open Zoom Viewer</button></div>
@@ -1393,11 +1532,19 @@ function renderVideoBrowser() {{
     const taxonomyRaw = fullTaxonomyLabel(r);
     const taxonomyText = esc(taxonomyRaw);
     const overlay = esc(trailcamOverlayLabel(r));
+    const speciesCandidates = parseCandidateList(r.species_candidates_json || '[]');
+    const detectorObjects = parseCandidateList(r.detector_objects_json || '[]');
     const taxonomyLine = (taxonomyRaw && !isBlankRecord(r) && taxonomyRaw !== formatSpeciesLabel(r))
       ? `<div class='job-meta'>Taxonomy: ${{taxonomyText}}</div>`
       : '';
     const overlayLine = overlay ? `<div class='job-meta'>Trail-cam: ${{overlay}}</div>` : '';
-    return `<button class='frame-item${{active}}' type='button' data-src='${{src}}' data-id='${{esc(String(r.annotated_rel))}}' data-title='${{esc((r.source || '') + ' :: ' + (r.frame || ''))}}'><div>${{esc(String(r.frame))}} | ${{speciesText}}</div>${{taxonomyLine}}${{overlayLine}}</button>`;
+    const speciesCandLine = (SHOW_BROWSER_DETAILS && speciesCandidates.length)
+      ? `<div class='job-meta'>Species candidates: ${{esc(speciesCandidates.slice(0, 3).map((c) => c.confidence ? (String(c.label || '') + ' (' + String(c.confidence || '') + ')') : String(c.label || '')).join(', '))}}</div>`
+      : '';
+    const detectorLine = (SHOW_BROWSER_DETAILS && detectorObjects.length)
+      ? `<div class='job-meta'>Detected objects: ${{esc(detectorObjects.slice(0, 3).map((d) => d.confidence ? (String(d.label || '') + ' (' + String(d.confidence || '') + ')') : String(d.label || '')).join(', '))}}</div>`
+      : '';
+    return `<button class='frame-item${{active}}' type='button' data-src='${{src}}' data-id='${{esc(String(r.annotated_rel))}}' data-title='${{esc((r.source || '') + ' :: ' + (r.frame || ''))}}'><div>${{esc(String(r.frame))}} | ${{speciesText}}</div>${{taxonomyLine}}${{speciesCandLine}}${{detectorLine}}${{overlayLine}}</button>`;
   }}).join('');
   fList.querySelectorAll('.frame-item').forEach((btn) => {{
     btn.addEventListener('click', () => {{
@@ -1435,13 +1582,28 @@ async function queueSelectedFiles() {{
   fd.append('species_url', sp);
   fd.append('fps', fps);
   setInlineMsg('quickUploadMsg', `Queueing ${{files.length}} file(s)...`);
-  const res = await fetch('/process-multi', {{ method: 'POST', body: fd }});
-  if (res.redirected) {{
-    window.location.href = res.url;
-    return;
+  try {{
+    const res = await fetch('/process-multi', {{ method: 'POST', body: fd }});
+    let data = null;
+    try {{
+      data = await res.json();
+    }} catch (_) {{
+      data = null;
+    }}
+    if (!res.ok || !data || !data.ok) {{
+      setInlineMsg('quickUploadMsg', (data && data.error) || 'Queue request failed. Please try again.', true);
+      return;
+    }}
+    const queued = Number(data.queued || 0);
+    const skipped = Number(data.skipped || 0);
+    const bad = Number(data.bad || 0);
+    setInlineMsg('quickUploadMsg', `Queued ${{queued}} file(s). Skipped: ${{skipped}}, invalid: ${{bad}}.`);
+    showTab('runs');
+    startRunsPolling();
+    void refreshRunsJobs();
+  }} catch (_) {{
+    setInlineMsg('quickUploadMsg', 'Queue request failed (network or server issue).', true);
   }}
-  setInlineMsg('quickUploadMsg', 'Queued. Reloading...');
-  window.location.reload();
 }}
 const dz = document.getElementById('dropZone');
 const multiPicker = document.getElementById('multiFiles');
@@ -1612,6 +1774,8 @@ function renderResultsBodyFromRecords() {{
     const taxonomyRaw = fullTaxonomyLabel(r);
     const taxonomy = esc(taxonomyRaw);
     const overlay = esc(trailcamOverlayLabel(r));
+    const speciesCandidates = parseCandidateList(r.species_candidates_json || '[]');
+    const detectorObjects = parseCandidateList(r.detector_objects_json || '[]');
     const isBlank = isBlankRecord(r);
     const searchBlob = (
       String(r.source || '') + ' '
@@ -1622,7 +1786,9 @@ function renderResultsBodyFromRecords() {{
       + String(manualTag || '') + ' '
       + String(speciesShort || '') + ' '
       + String(latin || '') + ' '
-      + String(speciesType || '') + ' blank no species match'
+      + String(speciesType || '') + ' '
+      + String(r.species_candidates_json || '') + ' '
+      + String(r.detector_objects_json || '') + ' blank no species match'
     ).toLowerCase();
     const defaultHtml = defaultBits.length
       ? `<div><b>Default tags:</b></div><div class='tag-list'>${{defaultBits.map((t) => `<span class='tag-chip default'>${{esc(t)}}</span>`).join('')}}</div>`
@@ -1633,6 +1799,12 @@ function renderResultsBodyFromRecords() {{
     const latinHtml = (latin && !isBlank) ? `<div><b>Latin:</b> ${{esc(latin)}}</div>` : '';
     const taxonomyHtml = (taxonomyRaw && !isBlank && taxonomyRaw !== speciesDisp) ? `<div><b>Taxonomy:</b> ${{taxonomy}}</div>` : '';
     const overlayHtml = overlay ? `<div><b>Trail-cam stamp:</b> ${{overlay}}</div>` : '';
+    const speciesCandidatesHtml = speciesCandidates.length
+      ? `<div><b>Species candidates:</b></div>${{renderCandidateTable(speciesCandidates, 5, 'species')}}`
+      : '';
+    const detectorObjectsHtml = detectorObjects.length
+      ? `<div><b>Detected objects:</b></div>${{renderCandidateTable(detectorObjects, 8, 'detector')}}`
+      : '';
     const rel = String(r.annotated_rel || '');
     const relJs = JSON.stringify(rel);
     const inputJs = JSON.stringify(String(r.input_abs || ''));
@@ -1645,7 +1817,7 @@ function renderResultsBodyFromRecords() {{
       + `<div><b>Video:</b> ${{esc(String(r.source || ''))}}</div>`
       + `<div><b>Frame:</b> ${{esc(String(r.frame || ''))}}</div>`
       + `<div><b>Species:</b> ${{esc(String(speciesDisp || '—'))}}</div>`
-      + latinHtml + taxonomyHtml + overlayHtml + defaultHtml + manualHtml
+      + latinHtml + taxonomyHtml + overlayHtml + speciesCandidatesHtml + detectorObjectsHtml + defaultHtml + manualHtml
       + `<div class='desc-col' title='${{esc(String(r.description || ''))}}'>${{esc(String(r.description || ''))}}</div>`
       + `<div style='margin-top:4px' class='actions'><button class='btn btn-subtle' type='button' onclick='editManualTag(${{relJs}})'>Edit tag</button><button class='btn btn-subtle' type='button' onclick='rerunFrame(${{inputJs}}, ${{jobJs}})'>Re-run frame</button></div>`
       + "</div></div>"
@@ -1884,6 +2056,8 @@ function manualSyncNow() {{
   void refreshRunsJobs();
   void refreshResultsRecords();
 }}
+const browserDetailCb = document.getElementById('settingsBrowserDetails');
+if (browserDetailCb) browserDetailCb.checked = !!SHOW_BROWSER_DETAILS;
 attachImageClickHandlers();
 renderTagFilterChips();
 renderVideoBrowser();

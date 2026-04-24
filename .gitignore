@@ -2,6 +2,8 @@
 config/stack.json
 data/
 media/
+# Stray empty sqlite sometimes created at repo root; real DB lives under data/
+webapp.db
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

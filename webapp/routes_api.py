@@ -9,6 +9,7 @@ Function index:
 
 import os
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -362,6 +363,25 @@ def register_api_routes(
                 if job_input_resolved is not None:
                     allowed_inputs.add(job_input_resolved)
         if not allowed_inputs:
+            # Fallback for older jobs where outputs_json is absent but output artifacts exist.
+            out_dir_raw = str(j.get("output_dir") or "").strip()
+            if out_dir_raw:
+                out_dir = Path(out_dir_raw)
+                if out_dir.is_dir():
+                    known_stems: set[str] = set()
+                    for ann in out_dir.glob("*.annotated.jpg"):
+                        base = re.sub(r"\.annotated\.jpg$", "", ann.name, flags=re.IGNORECASE).strip()
+                        if base:
+                            known_stems.add(base.lower())
+                    raw_candidate = str(body.input_path or "").strip()
+                    if raw_candidate:
+                        try:
+                            req_path = Path(raw_candidate).expanduser().resolve(strict=False)
+                        except Exception:
+                            req_path = None
+                        if req_path is not None and req_path.stem.lower() in known_stems:
+                            allowed_inputs.add(req_path)
+        if not allowed_inputs:
             return JSONResponse(
                 {"ok": False, "error": "No recorded frames found for this job yet."},
                 status_code=409,
@@ -371,11 +391,62 @@ def register_api_routes(
         allowed_by_norm = {os.path.normcase(os.path.normpath(str(candidate))): candidate for candidate in allowed_inputs}
         matched_input = allowed_by_norm.get(requested_norm)
         if matched_input is None:
+            # Legacy/partial jobs may have incomplete outputs_json entries for some frames.
+            # Allow rerun when requested frame stem maps to this job's annotated outputs.
+            out_dir_raw = str(j.get("output_dir") or "").strip()
+            if out_dir_raw:
+                out_dir = Path(out_dir_raw)
+                if out_dir.is_dir():
+                    known_stems: set[str] = set()
+                    for ann in out_dir.glob("*.annotated.jpg"):
+                        base = re.sub(r"\.annotated\.jpg$", "", ann.name, flags=re.IGNORECASE).strip()
+                        if base:
+                            known_stems.add(base.lower())
+                    try:
+                        req_path = Path(raw_path).expanduser().resolve(strict=False)
+                    except Exception:
+                        req_path = None
+                    if req_path is not None and req_path.stem.lower() in known_stems:
+                        matched_input = req_path
+        if matched_input is None:
             return JSONResponse({"ok": False, "error": "Frame is not part of this job."}, status_code=403)
         try:
             resolved = matched_input.resolve(strict=True)
         except Exception:
-            return JSONResponse({"ok": False, "error": "Input frame not found."}, status_code=400)
+            # Fallback: reconstruct likely frame path for legacy/partial jobs.
+            raw_name = Path(raw_path).name
+            stem = Path(raw_path).stem
+            recovered: Path | None = None
+            out_dir_raw = str(j.get("output_dir") or "").strip()
+            if out_dir_raw:
+                out_dir = Path(out_dir_raw)
+                if out_dir.is_dir():
+                    ext_candidates = [".jpg", ".jpeg", ".png", ".webp"]
+                    for ext in ext_candidates:
+                        c = out_dir / f"{stem}{ext}"
+                        if c.is_file():
+                            recovered = c
+                            break
+            if recovered is None and raw_name:
+                try:
+                    repo_root = Path(__file__).resolve().parents[1]
+                    default_input = repo_root / "test-media" / "input"
+                    runtime_input = Path(
+                        str(db.get_control("runtime_input_dir", str(default_input)) or str(default_input))
+                    ).expanduser().resolve(strict=False)
+                except Exception:
+                    runtime_input = None
+                if runtime_input is not None:
+                    c = runtime_input / raw_name
+                    if c.is_file():
+                        recovered = c
+                if recovered is None:
+                    c = default_input / raw_name
+                    if c.is_file():
+                        recovered = c
+            if recovered is None:
+                return JSONResponse({"ok": False, "error": "Input frame not found."}, status_code=400)
+            resolved = recovered.resolve(strict=True)
         if not resolved.is_file():
             return JSONResponse({"ok": False, "error": "Input path must be a file."}, status_code=400)
         if resolved.suffix.lower() not in (".jpg", ".jpeg", ".png", ".webp"):

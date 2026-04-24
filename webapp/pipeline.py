@@ -125,6 +125,7 @@ def draw_boxes(
         out_path.parent.mkdir(parents=True, exist_ok=True)
         im.save(out_path)
         return
+    drawn_boxes = 0
     for obj in det.get("objects") or []:
         bbox = obj.get("bbox")
         if not isinstance(bbox, list) or len(bbox) != 4:
@@ -133,6 +134,7 @@ def draw_boxes(
         conf = float(conf_raw) if isinstance(conf_raw, (float, int)) else 0.0
         if conf < max(0.0, float(min_detector_confidence)):
             continue
+        drawn_boxes += 1
         x1, y1, x2, y2 = bbox
         d.rectangle((x1, y1, x2, y2), outline=(144, 238, 144), width=3)
         det_class = str(obj.get("class", "?")).replace("_", " ").strip().lower()
@@ -156,6 +158,24 @@ def draw_boxes(
             tw, th = (longest * max(8, font_size // 2), (font_size + 4) * len(label_lines))
         d.rectangle((tx - 3, ty - 2, tx + tw + 4, ty + th + 2), fill=(15, 23, 42))
         d.multiline_text((tx, ty), label, fill=(167, 243, 208), font=font, spacing=2)
+    if drawn_boxes == 0 and clean_species:
+        # Fallback: when detector returns no drawable boxes, still annotate the frame
+        # so users can see species output is present on this image.
+        x1, y1, x2, y2 = 8, 8, max(9, w - 8), max(9, h - 8)
+        d.rectangle((x1, y1, x2, y2), outline=(250, 220, 235), width=1)
+        if isinstance(species_score, (float, int)):
+            label = f"{clean_species.lower()}: {float(species_score) * 100.0:.1f}% (no detector box)"
+        else:
+            label = f"{clean_species.lower()} (no detector box)"
+        tx = x1 + 6
+        ty = y1 + 6
+        try:
+            l, t, r, b = d.textbbox((0, 0), label, font=font)
+            tw, th = (r - l), (b - t)
+        except Exception:
+            tw, th = (len(label) * max(8, font_size // 2), font_size + 4)
+        d.rectangle((tx - 3, ty - 2, tx + tw + 4, ty + th + 2), fill=(30, 41, 59))
+        d.text((tx, ty), label, fill=(226, 232, 240), font=font)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     im.save(out_path)
 
