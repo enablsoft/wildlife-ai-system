@@ -9,7 +9,7 @@ Run a wildlife-processing stack using **prebuilt Docker images**:
 This repository is deployment-focused. It includes Docker Compose files, environment templates, scripts, and the local web app.
 Container images are pulled from **GHCR** (GitHub Container Registry). Core service source code is maintained in a separate upstream repository.
 
-![Video frame processing](https://raw.githubusercontent.com/enablsoft/wildlife-ai-system/main/docs/images/video-frame-processing.png)
+![Video frame processing](wildlife-ai-system-public/docs/images/video-frame-processing.png)
 
 ---
 
